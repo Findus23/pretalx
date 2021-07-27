@@ -1,17 +1,15 @@
 import os
 from contextlib import suppress
-from urllib.parse import urlparse
 from pathlib import Path
+from urllib.parse import urlparse
 
 from django.contrib.messages import constants as messages
 from django.utils.crypto import get_random_string
 from django.utils.translation import gettext_lazy as _
 from pkg_resources import iter_entry_points
-
 from pretalx import __version__
 from pretalx.common.settings.config import build_config
 from pretalx.common.settings.utils import log_initial
-
 
 config, CONFIG_FILES = build_config()
 CONFIG = config
@@ -129,9 +127,10 @@ SECURE_CONTENT_TYPE_NOSNIFF = True
 SECURE_REFERRER_POLICY = "strict-origin-when-cross-origin"
 
 CSP_DEFAULT_SRC = "'self'"
-CSP_SCRIPT_SRC = ("'self'",)
+CSP_SCRIPT_SRC = ("'self'", "mtm.matomocamp.org")
+CSP_CONNECT_SRC = ("'self'", "mtm.matomocamp.org")
 CSP_STYLE_SRC = ("'self'", "'unsafe-inline'")
-CSP_IMG_SRC = ("'self'", "data:")
+CSP_IMG_SRC = ("'self'", "data:", "mtm.matomocamp.org")
 CSP_BASE_URI = "'none'"
 CSP_FORM_ACTION = "'self'"
 
