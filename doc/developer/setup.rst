@@ -126,6 +126,8 @@ Before you check in your code into git, always run the static linters and style 
     (env)$ black .
     (env)$ isort .
     (env)$ flake8 .
+    (env)$ find -name "*.html" | xargs djhtml -i
+    (env)$ docformatter --in-place -r .
 
 Once you're done with those, run the tests::
 
@@ -144,16 +146,17 @@ afterwards to format that file.
 Working with mails
 ^^^^^^^^^^^^^^^^^^
 
-If you want to test emails in your development setup, we recommend starting
-Python's debugging SMTP server in a separate shell and configuring pretalx to
-use it. The debugging SMTP server will print every email to its stdout.
+When running in development mode, Pretalx uses Django's console email backend.
+This means the development server will print any emails to its stdout, instead
+of sending them via SMTP.
 
-Add this to your ``src/pretalx.cfg``::
+If you want to test sending event emails via a custom SMTP server, we recommend
+starting Python's debugging SMTP server in a separate shell::
 
-    [mail]
-    port = 1025
+    python -m smtpd -n -c DebuggingServer localhost:1025
 
-Then execute ``python -m smtpd -n -c DebuggingServer localhost:1025``.
+You can use this server by specifying host ``localhost`` and port ``1025`` in
+the event email settings.
 
 Working with translations
 ^^^^^^^^^^^^^^^^^^^^^^^^^

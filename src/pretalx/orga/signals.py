@@ -38,7 +38,8 @@ activate_event = EventPluginSignal()
 """
 This signal is sent out before an event goes live. It allows any installed
 plugin to raise an Exception to prevent the event from going live. The
-exception message will be exposed to the user.
+exception message will be exposed to the user. If a string value is returned, pretalx
+will show it as a success message.
 You will get the request as a keyword argument ``request``.
 Receivers are not expected to return a response.
 
@@ -66,7 +67,7 @@ but you might need to modify that data.
 
 The ``sender`` keyword argument will contain the event of the **new** event. The ``other``
 keyword argument will contain the event slug to **copy from**. The keyword arguments
-``submission_type_map``, ``question_map``, and ``track_map`` contain
+``submission_type_map``, ``question_map``, ``track_map`` and ``speaker_information_map`` contain
 mappings from object IDs in the original event to objects in the new event of the respective
 types.
 """

@@ -19,15 +19,13 @@ def get_schedule_urls(regex_prefix, name_prefix=""):
         path(f"{regex_prefix}{regex}", view, name=f"{name_prefix}{name}")
         for regex, view, name in [
             ("/", schedule.ScheduleView.as_view(), "schedule"),
+            ("/nojs", schedule.ScheduleNoJsView.as_view(), "schedule-nojs"),
             (".xml", schedule.ExporterView.as_view(), "export.schedule.xml"),
             (".xcal", schedule.ExporterView.as_view(), "export.schedule.xcal"),
             (".json", schedule.ExporterView.as_view(), "export.schedule.json"),
             (".ics", schedule.ExporterView.as_view(), "export.schedule.ics"),
-            (
-                "/export/<name>",
-                schedule.ExporterView.as_view(),
-                "export",
-            ),
+            ("/widget/v2.json", widget.widget_data_v2, "widget.data.2"),
+            ("/export/<name>", schedule.ExporterView.as_view(), "export"),
         ]
     ]
 
@@ -63,11 +61,6 @@ urlpatterns = [
                     "schedule/widget/v1.json",
                     widget.WidgetData.as_view(),
                     name="widget.data",
-                ),
-                path(
-                    "schedule/widget/v2.json",
-                    widget.widget_data_v2,
-                    name="widget.data.2",
                 ),
                 *get_schedule_urls("schedule"),
                 *get_schedule_urls("schedule/v/<version>", "versioned-"),

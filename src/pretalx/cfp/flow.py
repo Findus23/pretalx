@@ -180,7 +180,7 @@ class FormFlowStep(TemplateFlowStep):
     def get_form(self, from_storage=False):
         if self.request.method == "GET" or from_storage:
             return self.form_class(
-                data=self.get_form_initial() or None,
+                data=self.get_form_initial() if from_storage else None,
                 initial=self.get_form_initial(),
                 files=self.get_files(),
                 **self.get_form_kwargs(),
@@ -571,8 +571,8 @@ class CfPFlow:
                 {
                     "icon": step.icon,
                     "icon_label": step.label,
-                    "title": step_config.get("title", step.title),
-                    "text": step_config.get("text", step.text),
+                    "title": i18n_string(step_config.get("title", step.title), locales),
+                    "text": i18n_string(step_config.get("text", step.text), locales),
                     "identifier": step.identifier,
                     "fields": [
                         {

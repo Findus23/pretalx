@@ -1,13 +1,11 @@
 from urllib.parse import urlparse
 
 import vobject
-from csp.decorators import csp_update
 from django.conf import settings
 from django.contrib import messages
 from django.db.models import Q
 from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404, render
-from django.utils.decorators import method_decorator
 from django.utils.functional import cached_property
 from django.utils.translation import gettext_lazy as _
 from django.views.generic import DetailView, FormView, TemplateView
@@ -22,7 +20,6 @@ from pretalx.submission.forms import FeedbackForm
 from pretalx.submission.models import QuestionTarget, Submission, SubmissionStates
 
 
-@method_decorator(csp_update(IMG_SRC="https://www.gravatar.com"), name="dispatch")
 class TalkView(PermissionRequired, TemplateView):
     model = Submission
     slug_field = "code"
@@ -75,8 +72,10 @@ class TalkView(PermissionRequired, TemplateView):
 
     def get(self, request, *args, **kwargs):
         response = super().get(request, *args, **kwargs)
+        csp_update = {"img-src": "https://www.gravatar.com"}
         if self.recording.get("csp_header"):
-            response._csp_update = {"frame-src": self.recording.get("csp_header")}
+            csp_update["frame-src"] = self.recording.get("csp_header")
+        response._csp_update = csp_update
         return response
 
     def get_context_data(self, **kwargs):
@@ -151,6 +150,14 @@ class TalkReviewView(TalkView):
             ],
         )
 
+    @context
+    def hide_visibility_warning(self):
+        return True
+
+    @context
+    def hide_speaker_links(self):
+        return True
+
 
 class SingleICalView(EventPageMixin, DetailView):
     model = Submission
@@ -168,11 +175,13 @@ class SingleICalView(EventPageMixin, DetailView):
         cal.add("prodid").value = "-//pretalx//{}//{}".format(netloc, code)
         for talk in talk_slots:
             talk.build_ical(cal)
-        resp = HttpResponse(cal.serialize(), content_type="text/calendar")
-        resp[
-            "Content-Disposition"
-        ] = f'attachment; filename="{request.event.slug}-{code}.ics"'
-        return resp
+        return HttpResponse(
+            cal.serialize(),
+            content_type="text/calendar",
+            headers={
+                "Content-Disposition": f'attachment; filename="{request.event.slug}-{code}.ics"'
+            },
+        )
 
 
 class FeedbackView(PermissionRequired, FormView):

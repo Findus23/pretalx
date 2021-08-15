@@ -3,7 +3,11 @@ const dataMapping = JSON.parse(globalData.dataset.mapping)
 let searchUrl = globalData.dataset.url
 
 const drawTimeline = () => {
-  const dataElements = [document.getElementById("submission-timeline-data"), document.getElementById("talk-timeline-data")].filter(element => element.dataset.timeline)
+  const dataElements = [
+    document.getElementById("submission-timeline-data"),
+    document.getElementById("talk-timeline-data"),
+    document.getElementById("total-submission-timeline-data"),
+  ].filter(element => element.dataset.timeline)
   const element = document.getElementById("timeline")
   const deadlines = JSON.parse(globalData.dataset.annotations).deadlines.map(element => {
     return {
@@ -53,7 +57,10 @@ const drawTimeline = () => {
         }
       }
     },
-    colors: ["#3aa57c", "#4697c9"],
+    colors: ["#3aa57c", "#4697c9", "#cccccc"],
+    fill: {
+      type: ["gradient", "gradient", "gradient"],
+    },
     dataLabels: {
       enabled: false
     },
@@ -171,7 +178,8 @@ const drawPieChart = (data, scope, type) => {
 
 }
 
-let chartTypes = ["state", "type"]
+let chartTypes = ["state"]
+if (dataMapping.type && (Object.keys(dataMapping.type).length > 1)) chartTypes.push("type")
 if (dataMapping.track) chartTypes.push("track")
 let submissionChartData = chartTypes.reduce(
   (result, item, index, array) => {
@@ -197,8 +205,8 @@ for (const [key, data] of Object.entries(submissionChartData)) {
 }
 
 
-const button = document.querySelector("#toggle-button")
-button.addEventListener("click", event => {
+const toggleButton = document.querySelector("#toggle-button")
+toggleButton.addEventListener("click", event => {
   charts.forEach(chart => chart.destroy())
   charts = []
   if (event.target.getAttribute("aria-pressed") === "true") {

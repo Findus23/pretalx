@@ -409,6 +409,9 @@ class Submission(LogMixin, GenerateCode, FileCleanupMixin, models.Model):
                     submission=self,
                     schedule=self.event.wip_schedule,
                 )
+        TalkSlot.objects.filter(
+            submission=self, schedule=self.event.wip_schedule
+        ).update(is_visible=self.state == SubmissionStates.CONFIRMED)
 
     update_talk_slots.alters_data = True
 
@@ -543,7 +546,7 @@ class Submission(LogMixin, GenerateCode, FileCleanupMixin, models.Model):
             return []
         return self.event.current_schedule.talks.filter(
             submission=self, is_visible=True
-        )
+        ).select_related("room")
 
     @cached_property
     def display_speaker_names(self):
@@ -554,14 +557,26 @@ class Submission(LogMixin, GenerateCode, FileCleanupMixin, models.Model):
     def does_accept_feedback(self):
         slot = self.slot
         if slot and slot.start:
-            end = slot.end or slot.start + slot.submission.get_duration()
-            return end < now()
+            return slot.start < now()
         return False
 
     @cached_property
     def median_score(self):
         scores = [r.score for r in self.reviews.all() if r.score is not None]
         return statistics.median(scores) if scores else None
+
+    @cached_property
+    def mean_score(self):
+        scores = [r.score for r in self.reviews.all() if r.score is not None]
+        return round(statistics.fmean(scores), 1) if scores else None
+
+    @cached_property
+    def score_categories(self):
+        track = self.track
+        track_filter = models.Q(limit_tracks__isnull=True)
+        if track:
+            track_filter |= models.Q(limit_tracks__in=[track])
+        return self.event.score_categories.filter(track_filter, active=True)
 
     @cached_property
     def active_resources(self):

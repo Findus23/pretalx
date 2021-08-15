@@ -8,6 +8,7 @@ from pytz import UTC
 from pretalx.event.models import Event
 from pretalx.mail.models import QueuedMail
 from pretalx.submission.models import Question
+from pretalx.submission.models.question import QuestionRequired
 
 
 @pytest.mark.django_db
@@ -360,6 +361,7 @@ def test_can_add_simple_question(orga_client, event):
             "variant": "string",
             "active": True,
             "help_text_0": "Answer if you want to reach the other side!",
+            "question_required": QuestionRequired.OPTIONAL,
         },
         follow=True,
     )
@@ -376,6 +378,92 @@ def test_can_add_simple_question(orga_client, event):
     response = orga_client.get(q.urls.base + "?role=false", follow=True)
     with scope(event=event):
         assert str(q.question) in response.content.decode()
+
+
+@pytest.mark.django_db
+def test_can_add_simple_question_required_freeze(orga_client, event):
+    with scope(event=event):
+        assert event.questions.count() == 0
+    response = orga_client.post(
+        event.cfp.urls.new_question,
+        {
+            "target": "submission",
+            "question_0": "What is your name?",
+            "variant": "string",
+            "active": True,
+            "help_text_0": "Answer if you want to reach the other side!",
+            "question_required": QuestionRequired.REQUIRED,
+            "freeze_after": "2021-06-22T12:44:42Z",
+        },
+        follow=True,
+    )
+    assert response.status_code == 200
+    with scope(event=event):
+        event.refresh_from_db()
+        assert event.questions.count() == 1
+        q = event.questions.first()
+        assert str(q.question) == "What is your name?"
+        assert q.variant == "string"
+    response = orga_client.get(q.urls.base + "?role=true", follow=True)
+    with scope(event=event):
+        assert str(q.question) in response.content.decode()
+    response = orga_client.get(q.urls.base + "?role=false", follow=True)
+    with scope(event=event):
+        assert str(q.question) in response.content.decode()
+
+
+@pytest.mark.django_db
+def test_can_add_simple_question_after_deadline(orga_client, event):
+    with scope(event=event):
+        assert event.questions.count() == 0
+    response = orga_client.post(
+        event.cfp.urls.new_question,
+        {
+            "target": "submission",
+            "question_0": "What is your name?",
+            "variant": "string",
+            "active": True,
+            "help_text_0": "Answer if you want to reach the other side!",
+            "question_required": QuestionRequired.AFTER_DEADLINE,
+            "deadline": "2021-06-22T12:44:42Z",
+        },
+        follow=True,
+    )
+    assert response.status_code == 200
+    with scope(event=event):
+        event.refresh_from_db()
+        assert event.questions.count() == 1
+        q = event.questions.first()
+        assert str(q.question) == "What is your name?"
+        assert q.variant == "string"
+        assert q.deadline == dt.datetime(2021, 6, 22, 12, 44, 42, tzinfo=UTC)
+    response = orga_client.get(q.urls.base + "?role=true", follow=True)
+    with scope(event=event):
+        assert str(q.question) in response.content.decode()
+    response = orga_client.get(q.urls.base + "?role=false", follow=True)
+    with scope(event=event):
+        assert str(q.question) in response.content.decode()
+
+
+@pytest.mark.django_db
+def test_can_add_simple_question_after_deadline_missing_deadline(orga_client, event):
+    with scope(event=event):
+        assert event.questions.count() == 0
+    orga_client.post(
+        event.cfp.urls.new_question,
+        {
+            "target": "submission",
+            "question_0": "What is your name?",
+            "variant": "string",
+            "active": True,
+            "help_text_0": "Answer if you want to reach the other side!",
+            "question_required": QuestionRequired.AFTER_DEADLINE,
+        },
+        follow=True,
+    )
+    with scope(event=event):
+        event.refresh_from_db()
+        assert event.questions.count() == 0
 
 
 @pytest.mark.django_db
@@ -398,6 +486,7 @@ def test_can_add_choice_question(orga_client, event):
             "form-1-answer_0": "European",
             "form-2-id": "",
             "form-2-answer_0": "",
+            "question_required": QuestionRequired.OPTIONAL,
         },
         follow=True,
     )
@@ -438,6 +527,7 @@ def test_can_edit_choice_question(orga_client, event, choice_question):
             "form-2-DELETE": "on",
             "form-3-id": "",
             "form-3-answer_0": "",
+            "question_required": QuestionRequired.OPTIONAL,
         },
         follow=True,
     )
@@ -549,7 +639,8 @@ def test_can_remind_answered_submission_question(
     with scope(event=event):
         from pretalx.submission.models.question import Answer
 
-        question.required = True
+        question.question_required = QuestionRequired.REQUIRED
+        question.deadline = None
         question.save()
         original_count = QueuedMail.objects.count()
         event.question_template = None

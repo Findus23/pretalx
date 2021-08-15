@@ -102,6 +102,10 @@ class OutboxSend(EventPermissionRequired, TemplateView):
     @cached_property
     def queryset(self):
         qs = self.request.event.queued_mails.filter(sent__isnull=True)
+        pks = self.request.GET.get("pks") or ""
+        if pks:
+            pks = pks.split(",")
+            qs = qs.filter(pk__in=pks)
         return qs
 
     def post(self, request, *args, **kwargs):
@@ -307,10 +311,12 @@ class ComposeMail(EventPermissionRequired, FormView):
             for m in form.cleaned_data.get("additional_recipients", "").split(",")
             if m.strip()
         ]
+        users_found = 0
         for email in additional_mails:
             user = User.objects.filter(email__iexact=email).first()
             if user:
                 user_set.add(user)
+                users_found += 1
             else:
                 QueuedMail.objects.create(
                     event=self.request.event,
@@ -337,7 +343,7 @@ class ComposeMail(EventPermissionRequired, FormView):
             self.request,
             _(
                 "{count} emails have been saved to the outbox – you can make individual changes there or just send them all."
-            ).format(count=len(user_set) + len(additional_mails)),
+            ).format(count=len(user_set) + len(additional_mails) - users_found),
         )
         return super().form_valid(form)
 

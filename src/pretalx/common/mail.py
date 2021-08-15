@@ -5,7 +5,6 @@ from smtplib import SMTPResponseException, SMTPSenderRefused
 from django.conf import settings
 from django.core.mail import EmailMultiAlternatives, get_connection
 from django.core.mail.backends.smtp import EmailBackend
-from inlinestyler.utils import inline_css
 
 from pretalx.celery_app import app
 from pretalx.common.exceptions import SendMailException
@@ -54,22 +53,30 @@ def mail_send_task(
     bcc: list = None,
     headers: dict = None,
 ):
+    if isinstance(to, str):
+        to = [to]
+    to = [t for t in to if not t.endswith("@localhost")]
+    if not to:
+        return
     reply_to = (
         [] if not reply_to or (len(reply_to) == 1 and reply_to[0] == "") else reply_to
     )
     reply_to = reply_to.split(",") if isinstance(reply_to, str) else reply_to
-    if isinstance(to, str):
-        to = [to]
     if event:
         event = Event.objects.get(pk=event)
         backend = event.get_mail_backend()
-        sender = event.settings.get("mail_from")
-        if not reply_to and event.settings.get("mail_reply_to"):
-            reply_to = [
-                formataddr((str(event.name), event.settings.get("mail_reply_to")))
-            ]
-        if not sender or sender == "noreply@example.org":
-            reply_to = reply_to or [formataddr((str(event.name), event.email))]
+
+        sender = settings.MAIL_FROM
+        if event.settings.smtp_use_custom:
+            sender = event.settings.mail_from or sender
+
+        reply_to = reply_to or event.settings.mail_reply_to
+        if not reply_to and sender == settings.MAIL_FROM:
+            reply_to = event.email
+
+        if isinstance(reply_to, str):
+            reply_to = [formataddr((str(event.name), reply_to))]
+
         sender = formataddr((str(event.name), sender or settings.MAIL_FROM))
     else:
         sender = formataddr(("pretalx", settings.MAIL_FROM))
@@ -86,6 +93,8 @@ def mail_send_task(
         reply_to=reply_to,
     )
     if html is not None:
+        from inlinestyler.utils import inline_css
+
         email.attach_alternative(inline_css(html), "text/html")
 
     try:

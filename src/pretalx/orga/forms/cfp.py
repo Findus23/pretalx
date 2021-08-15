@@ -1,5 +1,6 @@
 from django import forms
 from django.db.models import Count, Q
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from django_scopes.forms import SafeModelChoiceField, SafeModelMultipleChoiceField
 from hierarkey.forms import HierarkeyForm
@@ -15,6 +16,7 @@ from pretalx.submission.models import (
     SubmitterAccessCode,
     Track,
 )
+from pretalx.submission.models.question import QuestionRequired
 
 
 class CfPSettingsForm(ReadOnlyFlag, I18nFormMixin, HierarkeyForm):
@@ -153,22 +155,44 @@ class QuestionForm(ReadOnlyFlag, I18nModelForm):
         ):
             self.fields["is_public"].disabled = True
 
+    def clean(self):
+        deadline = self.cleaned_data["deadline"]
+        question_required = self.cleaned_data["question_required"]
+        if (not deadline) and (question_required == QuestionRequired.AFTER_DEADLINE):
+            raise forms.ValidationError(
+                _(
+                    "Please select a deadline after which the question should become mandatory."
+                )
+            )
+        if (
+            question_required == QuestionRequired.OPTIONAL
+            or question_required == QuestionRequired.REQUIRED
+        ):
+            self.cleaned_data["deadline"] = None
+
     class Meta:
         model = Question
         fields = [
             "target",
             "question",
             "help_text",
+            "question_required",
+            "deadline",
+            "freeze_after",
             "variant",
             "is_public",
             "is_visible_to_reviewers",
-            "required",
             "tracks",
             "submission_types",
             "contains_personal_data",
             "min_length",
             "max_length",
         ]
+        widgets = {
+            "deadline": forms.DateTimeInput(attrs={"class": "datetimepickerfield"}),
+            "question_required": forms.RadioSelect(),
+            "freeze_after": forms.DateTimeInput(attrs={"class": "datetimepickerfield"}),
+        }
         field_classes = {
             "variant": SafeModelChoiceField,
             "tracks": SafeModelMultipleChoiceField,
@@ -421,10 +445,11 @@ class ReminderFilterForm(QuestionFilterForm):
     )
 
     def get_question_queryset(self):
+        # We want to exclude questions with "freeze after", the deadlines of which have passed
         return Question.objects.filter(
             event=self.event,
             target__in=["speaker", "submission"],
-        )
+        ).exclude(freeze_after__lt=timezone.now())
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

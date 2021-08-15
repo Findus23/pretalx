@@ -1,6 +1,8 @@
 import pytest
 from django_scopes import scope
 
+from pretalx.submission.models.question import QuestionRequired
+
 
 @pytest.mark.django_db
 def test_reviewer_can_add_review(review_client, submission):
@@ -105,7 +107,7 @@ def test_reviewer_cannot_ignore_required_question(
     with scope(event=submission.event):
         category = submission.event.score_categories.first()
         score = category.scores.filter(value=1).first()
-        review_question.required = True
+        review_question.question_required = QuestionRequired.REQUIRED
         review_question.save()
     response = review_client.post(
         submission.orga_urls.reviews,
@@ -271,7 +273,7 @@ def test_reviewer_can_see_dashboard(
     django_assert_max_num_queries,
     other_submission,
 ):
-    with django_assert_max_num_queries(53):
+    with django_assert_max_num_queries(56):
         response = review_client.get(
             submission.event.orga_urls.reviews + "?sort=" + sort
         )
@@ -289,7 +291,7 @@ def test_reviewer_with_track_limit_can_see_dashboard(
     other_submission,
 ):
     review_user.teams.first().limit_tracks.add(track)
-    with django_assert_max_num_queries(54):
+    with django_assert_max_num_queries(56):
         response = review_client.get(submission.event.orga_urls.reviews)
     assert response.status_code == 200
 

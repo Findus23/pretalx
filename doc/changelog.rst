@@ -3,6 +3,58 @@
 Release Notes
 =============
 
+- :release:`2.2.0 <2021-08-15>`
+- :feature:`-` To improve performance, the NoJS schedule is now located on a separate page.
+- :feature:`1143` On self-hosted pretalx instances, you can now configure pretalx to include additional CSP headers, especially of interest for plugin developers.
+- :bug:`-` In the submission API view, the end time of a slot was sometimes empty.
+- :feature:`-` If you use custom domains, pretalx will automatically redirect the domain to the most recent event that uses this domain. This also means that you can configure multiple events with the same custom domain!
+- :feature:`656` You can now choose if you want to compare the median of review scores or the average/mean.
+- :feature:`313` Organisers can now create custom proposal and speaker exports (as either CSV or JSON), including any data they need.
+- :support:`-` If you use PostgreSQL, please make sure to be on at least PostgreSQL 10.
+- :feature:`-` pretalx will no longer send emails to localhost addresses, as those are used for deleted users. Please get in touch if this is a problem for you.
+- :feature:`1069` You can freeze a question after a certain date, prohibiting users from changing their answers after the deadline.
+- :feature:`1069` You can now attach deadlines to questions, making them optional before the deadline and mandatory afterwards.
+- :feature:`-` With the ``anon`` query parameter, you can request anonymised proposal data from the API, even when you have permission to see the full data.
+- :bug:`-` In the CfP editor, when a step description was only given in a language that wasn't currently active, you couldn't change it any longer.
+- :bug:`1111` pretalx would send multiple emails for proposals with multiple speakers.
+- :bug:`-` Not all existing review scores were recalculated when review score weights were changed during a review phase.
+- :feature:`1082` Event header images are now scaled down to a height of 150px.
+- :bug:`1093` pretalx sometimes over-reported the number of emails generated when bulk-sending emails.
+- :feature:`1092` You can now get a list of proposals or speakers that are still missing the answer to a given question.
+- :bug:`-` The display of external videos in pretalx was broken due to a security header being set too strictly.
+- :feature:`-` pretalx has better rendering for multi-line code blocks (``\`\`\```) in markdown elements and supports code highlighting.
+- :bug:`-` When your default submission type had a deadline prior to the event-wide deadline, the CfP form wouldn't accept new proposals past the earlier deadline.
+- :bug:`1087` pretalx would sometimes show unnecessary warnings in the talk editor when talks were scheduled across day breaks.
+- :feature:`-` You can mark review score categories as independent. They won't be part of the total calculation, and instead show up as their own column in the review dashboard.
+- :feature:`-` You can now search speakers by specific given answers, as you could already search proposals and sessions.
+- :bug:`-` The API would return errors in some edge cases when used by unauthenticated users.
+- :bug:`-` When you created a session as organiser, you could choose a content language that was not supposed to be available in the active event.
+- :bug:`-` Sessions without speakers were displayed weirdly in the "featured sessions" page.
+- :feature:`-` Tags are now exposed in the API.
+- :feature:`1047` The review statistics timeline chart now includes the total submitted proposals to the given date, in addition to the proposals submitted on the given date.
+- :bug:`1049` Reviewers without further permissions could not create tags, even when they had the necessary permissions.
+- :feature:`1036` The talk feedback page is now available once a talk has started, not once it is over.
+- :bug:`1023` If you used links to pre-fill parts of the CfP form, you sometimes couldn't get part the first page.
+- :bug:`-` The display of large talk images was off, extending them too far to the right.
+- :feature:`-` The availability widget now shows day names in your locale instead of always using English.
+- :feature:`-` To prevent emails getting recorded as spam, the custom sender address is now only used when you are using a custom email server. You can still set the reply-to address.
+- :feature:`-` If you run pretalx with ``--no-pretalx-information``, it will not print the pretalx information header.
+- :feature:`-` pretalx will resize uploaded images down to 1920x1080 (by default).
+- :feature:`-` pretalx now removes EXIF metadata from all uploaded images.
+- :feature:`-` The event activation signal can now return a string to be shown as success message.
+- :bug:`-` The HTML export did not work with the new schedule page.
+- :feature:`-` In addition to sending either all emails or a single email, organisers can now also send only the currently selected emails. This is particularly helpful with an email provider (*cough* google) who starts rejecting emails when bulk-sending, halfway through your sending process.
+- :bug:`-` A bug led to the first schedule release of every event being empty, sometimes, since all talks were treated as unconfirmed.
+- :bug:`-` Improved review interface so that long or complex scores don't break the interface when *editing* an existing review.
+- :feature:`-` In the review dashboard, you can now filter the list of proposals by how many reviews they have.
+- :feature:`1048` Added a password reset link to the page where you accept invitations to organiser teams.
+- :bug:`1049` The tag creation page is now hidden for users who don't have permission to create tags.
+- :feature:`-` Speaker information will now be copied when cloning an event.
+- :feature:`-` Speaker information can now be created for specific tracks or proposal types.
+- :feature:`-` You can now use the ``--silent`` flag with the ``regenerate_css`` command to reduce build verbosity.
+- :feature:`735` You can now filter talks by track and type in the schedule editor.
+- :feature:`-` Room availabilities are now more fine-grained, you can set them on a 15-minute basis instead of 30-minutes as before.
+- :bug:`-` The statistics page didn't work for events with just a single submission type.
 - :release:`2.1.1 <2021-01-16>`
 - :release:`2.1.0 <2021-01-16>`
 - :bug:`1046` pretalx shipped an incorrect override settings file that broke email sending.

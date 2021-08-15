@@ -1,4 +1,4 @@
-from collections import defaultdict
+from collections import defaultdict, namedtuple
 from contextlib import suppress
 from urllib.parse import quote
 
@@ -15,11 +15,11 @@ from django_scopes import ScopedManager
 from i18nfield.fields import I18nTextField
 
 from pretalx.agenda.tasks import export_schedule_html
-from pretalx.common.mixins import LogMixin
+from pretalx.common.mixins.models import LogMixin
 from pretalx.common.phrases import phrases
 from pretalx.common.urls import EventUrls
 from pretalx.mail.context import template_context_from_event
-from pretalx.person.models import User
+from pretalx.person.models import SpeakerProfile, User
 from pretalx.submission.models import SubmissionStates
 
 
@@ -55,6 +55,8 @@ class Schedule(LogMixin, models.Model):
 
     class urls(EventUrls):
         public = "{self.event.urls.schedule}v/{self.url_version}/"
+        widget_data = "{public}widget/v2.json"
+        nojs = "{public}nojs"
 
     @transaction.atomic
     def freeze(
@@ -195,12 +197,16 @@ class Schedule(LogMixin, models.Model):
             queryset = queryset.filter(published__lt=self.published)
         return queryset.order_by("-published").first()
 
-    def _handle_submission_move(self, submission_pk, old_slots, new_slots):
+    def _handle_submission_move(self, submission, old_slots, new_slots):
         new = []
         canceled = []
         moved = []
-        all_old_slots = list(old_slots.filter(submission__pk=submission_pk))
-        all_new_slots = list(new_slots.filter(submission__pk=submission_pk))
+        all_old_slots = [
+            slot for slot in old_slots if slot.submission_id == submission.pk
+        ]
+        all_new_slots = [
+            slot for slot in new_slots if slot.submission_id == submission.pk
+        ]
         old_slots = [
             slot
             for slot in all_old_slots
@@ -258,17 +264,25 @@ class Schedule(LogMixin, models.Model):
             result["action"] = "create"
             return result
 
-        old_slots = self.previous_schedule.scheduled_talks
-        new_slots = self.scheduled_talks
+        old_slots = list(self.previous_schedule.scheduled_talks)
+        new_slots = list(self.scheduled_talks)
+
+        Slot = namedtuple("Slot", ["submission", "room", "start"])
         old_slot_set = set(
-            old_slots.values_list("submission", "room", "start", named=True)
+            Slot(slot.submission, slot.room, slot.start) for slot in old_slots
         )
         new_slot_set = set(
-            new_slots.values_list("submission", "room", "start", named=True)
+            Slot(slot.submission, slot.room, slot.start) for slot in new_slots
         )
-        old_submissions = set(old_slots.values_list("submission__id", flat=True))
-        new_submissions = set(new_slots.values_list("submission__id", flat=True))
+        old_submissions = set(slot.submission for slot in old_slots)
+        new_submissions = set(slot.submission for slot in new_slots)
         handled_submissions = set()
+        new_by_submission = defaultdict(list)
+        old_by_submission = defaultdict(list)
+        for slot in new_slot_set:
+            new_by_submission[slot.submission].append(slot)
+        for slot in old_slot_set:
+            old_by_submission[slot.submission].append(slot)
 
         moved_or_missing = old_slot_set - new_slot_set - {None}
         moved_or_new = new_slot_set - old_slot_set - {None}
@@ -277,9 +291,7 @@ class Schedule(LogMixin, models.Model):
             if entry.submission in handled_submissions or not entry.submission:
                 continue
             if entry.submission not in new_submissions:
-                result["canceled_talks"] += list(
-                    old_slots.filter(submission__pk=entry.submission)
-                )
+                result["canceled_talks"] += old_by_submission[entry.submission]
             else:
                 new, canceled, moved = self._handle_submission_move(
                     entry.submission, old_slots, new_slots
@@ -292,9 +304,7 @@ class Schedule(LogMixin, models.Model):
             if entry.submission in handled_submissions:
                 continue
             if entry.submission not in old_submissions:
-                result["new_talks"] += list(
-                    new_slots.filter(submission__pk=entry.submission)
-                )
+                result["new_talks"] += new_by_submission[entry.submission]
             else:
                 new, canceled, moved = self._handle_submission_move(
                     entry.submission, old_slots, new_slots
@@ -311,6 +321,127 @@ class Schedule(LogMixin, models.Model):
         )
         return result
 
+    def get_talk_warnings(
+        self,
+        talk,
+        with_speakers=True,
+        room_avails=None,
+        speaker_avails=None,
+    ) -> list:
+        """A list of warnings that apply to this slot.
+
+        Warnings are dictionaries with a ``type`` (``room`` or
+        ``speaker``, for now) and a ``message`` fit for public display.
+        This property only shows availability based warnings.
+        """
+        from pretalx.schedule.models import Availability, TalkSlot
+
+        if not talk.start or not talk.submission:
+            return []
+        warnings = []
+        availability = talk.as_availability
+        if talk.room:
+            if room_avails is None:
+                room_avails = talk.room.availabilities.all()
+            if not any(
+                room_availability.contains(availability)
+                for room_availability in Availability.union(room_avails)
+            ):
+                warnings.append(
+                    {
+                        "type": "room",
+                        "message": _(
+                            "The room is not available at the scheduled time."
+                        ),
+                    }
+                )
+        for speaker in talk.submission.speakers.all():
+            if with_speakers:
+                profile = speaker.event_profile(event=self.event)
+                if speaker_avails is not None:
+                    profile_availabilities = speaker_avails.get(profile.pk)
+                else:
+                    profile_availabilities = list(profile.availabilities.all())
+                if profile_availabilities and not any(
+                    speaker_availability.contains(availability)
+                    for speaker_availability in Availability.union(
+                        profile_availabilities
+                    )
+                ):
+                    warnings.append(
+                        {
+                            "type": "speaker",
+                            "speaker": {
+                                "name": speaker.get_display_name(),
+                                "id": speaker.pk,
+                            },
+                            "message": _(
+                                "A speaker is not available at the scheduled time."
+                            ),
+                        }
+                    )
+            overlaps = (
+                TalkSlot.objects.filter(
+                    schedule=self, submission__speakers__in=[speaker]
+                )
+                .filter(
+                    models.Q(start__lt=talk.start, end__gt=talk.start)
+                    | models.Q(start__lt=talk.real_end, end__gt=talk.real_end)
+                    | models.Q(start__gt=talk.start, end__lt=talk.real_end)
+                )
+                .exists()
+            )
+            if overlaps:
+                warnings.append(
+                    {
+                        "type": "speaker",
+                        "speaker": {
+                            "name": speaker.get_display_name(),
+                            "id": speaker.pk,
+                        },
+                        "message": _(
+                            "A speaker is holding another session at the scheduled time."
+                        ),
+                    }
+                )
+
+        return warnings
+
+    def get_all_talk_warnings(self, talks=None):
+        talks = talks or self.talks.filter(submission__isnull=False).select_related(
+            "submission", "room"
+        ).prefetch_related("submission__speakers")
+        result = {}
+        with_speakers = self.event.settings.cfp_request_availabilities
+        room_avails = defaultdict(
+            list,
+            {
+                room.pk: room.availabilities.all()
+                for room in self.event.rooms.all().prefetch_related("availabilities")
+            },
+        )
+        speaker_avails = None
+        if with_speakers:
+            speaker_avails = defaultdict(
+                list,
+                {
+                    profile.pk: profile.availabilities.all()
+                    for profile in SpeakerProfile.objects.filter(
+                        event=self.event
+                    ).prefetch_related("availabilities")
+                },
+            )
+        for talk in talks:
+            talk_warnings = self.get_talk_warnings(
+                talk=talk,
+                with_speakers=with_speakers,
+                room_avails=room_avails.get(talk.room_id) if talk.room_id else None,
+                speaker_avails=speaker_avails,
+            )
+            if talk_warnings:
+                result[talk] = talk_warnings
+        return result
+
     @cached_property
     def warnings(self) -> dict:
         """A dictionary of warnings to be acknowledged before a release.
@@ -321,21 +452,28 @@ class Schedule(LogMixin, models.Model):
         visible due to their unconfirmed status, and ``no_track`` are
         submissions without a track in a conference that uses tracks.
         """
+        talks = (
+            self.talks.filter(submission__isnull=False)
+            .select_related("submission", "room")
+            .prefetch_related("submission__speakers")
+        )
         warnings = {
-            "talk_warnings": [],
-            "unscheduled": [],
-            "unconfirmed": [],
+            "talk_warnings": [
+                {"talk": key, "warnings": value}
+                for key, value in self.get_all_talk_warnings(
+                    talks.filter(start__isnull=False)
+                ).items()
+            ],
+            "unscheduled": talks.filter(start__isnull=True).count(),
+            "unconfirmed": talks.exclude(
+                submission__state=SubmissionStates.CONFIRMED
+            ).count(),
             "no_track": [],
         }
-        for talk in self.talks.filter(submission__isnull=False):
-            if not talk.start:
-                warnings["unscheduled"].append(talk)
-            elif talk.warnings:
-                warnings["talk_warnings"].append(talk)
-            if talk.submission.state != SubmissionStates.CONFIRMED:
-                warnings["unconfirmed"].append(talk)
-            if talk.submission.event.settings.use_tracks and not talk.submission.track:
-                warnings["no_track"].append(talk)
+        if self.event.settings.use_tracks:
+            warnings["no_track"] = talks.filter(
+                submission__track_id__isnull=True
+            ).count()
         return warnings
 
     @cached_property

@@ -28,7 +28,7 @@ and configuration here, but please have a look at the linked pages.
   ``pip3 -V`` to check.
 * An SMTP server to send out mails
 * An HTTP reverse proxy, e.g. `nginx`_ or Apache to allow HTTPS connections
-* A database server: `MySQL`_ 5.7+ or MariaDB 10.2+ or `PostgreSQL`_ 9.6+.
+* A database server: `MySQL`_ 5.7+ or MariaDB 10.2+ or `PostgreSQL`_ 10+.
   You can use SQLite, but we strongly recommend not to run SQLite in
   production. Given the choice, we'd recommend to use PostgreSQL.
 * A `redis`_ server, if you want to use pretalx with an asynchronous task
@@ -74,9 +74,14 @@ these commands::
   # sudo -u postgres createuser pretalx -P
   # sudo -u postgres createdb -O pretalx pretalx
 
+Make sure that your database encoding is UTF-8. You can check with this command::
+
+  # sudo -u postgres psql -c 'SHOW SERVER_ENCODING'
+
 When using MySQL, make sure you set the character set of the database to ``utf8mb4``, e.g. like this::
 
     mysql > CREATE DATABASE pretalx DEFAULT CHARACTER SET utf8mb4 DEFAULT COLLATE utf8mb4_unicode_ci
+
 
 
 Step 3: Package dependencies

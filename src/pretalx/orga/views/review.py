@@ -1,6 +1,10 @@
+import statistics
+from collections import defaultdict
+from contextlib import suppress
+
 from django.contrib import messages
 from django.db import transaction
-from django.db.models import Count, OuterRef, Q, Subquery
+from django.db.models import Count, Max, OuterRef, Q, Subquery
 from django.shortcuts import get_object_or_404, redirect
 from django.utils.functional import cached_property
 from django.utils.translation import gettext_lazy as _
@@ -42,7 +46,28 @@ class ReviewDashboard(EventPermissionRequired, Filterable, ListView):
             ],
         )
 
+    def filter_range(self, queryset):
+        review_count = self.request.GET.get("review-count") or ","
+        if "," not in review_count:
+            return queryset
+        min_reviews, max_reviews = review_count.split(",", maxsplit=1)
+        if min_reviews:
+            with suppress(Exception):
+                min_reviews = int(min_reviews)
+                if min_reviews > 0:
+                    queryset = queryset.filter(review_count__gte=min_reviews)
+        if max_reviews:
+            with suppress(Exception):
+                max_reviews = int(max_reviews)
+                if max_reviews < self.max_review_count:
+                    queryset = queryset.filter(review_count__lte=max_reviews)
+        return queryset
+
     def get_queryset(self):
+        aggregate_method = self.request.event.settings.review_score_aggregate
+        statistics_method = (
+            statistics.median if aggregate_method == "median" else statistics.fmean
+        )
         queryset = self.request.event.submissions.filter(
             state__in=[
                 SubmissionStates.SUBMITTED,
@@ -62,8 +87,9 @@ class ReviewDashboard(EventPermissionRequired, Filterable, ListView):
                 tracks.update(team.limit_tracks.filter(event=self.request.event))
             queryset = queryset.filter(track__in=tracks)
         queryset = self.filter_queryset(queryset).annotate(
-            review_count=Count("reviews")
+            review_count=Count("reviews", distinct=True)
         )
+        queryset = self.filter_range(queryset)
 
         user_reviews = Review.objects.filter(
             user=self.request.user, submission_id=OuterRef("pk")
@@ -72,12 +98,32 @@ class ReviewDashboard(EventPermissionRequired, Filterable, ListView):
         queryset = (
             queryset.annotate(user_score=Subquery(user_reviews))
             .select_related("track", "submission_type")
-            .prefetch_related("speakers", "reviews", "reviews__user")
+            .prefetch_related("speakers", "reviews", "reviews__user", "reviews__scores")
         )
 
         for submission in queryset:
             if self.can_see_all_reviews:
-                submission.current_score = submission.median_score
+                submission.current_score = (
+                    submission.median_score
+                    if aggregate_method == "median"
+                    else submission.mean_score
+                )
+                if (
+                    self.independent_categories
+                ):  # Assemble medians/means on the fly. Yay.
+                    independent_ids = [cat.pk for cat in self.independent_categories]
+                    mapping = defaultdict(list)
+                    for review in submission.reviews.all():
+                        for score in review.scores.all():
+                            if score.category_id in independent_ids:
+                                mapping[score.category_id].append(score.value)
+                    mapping = {
+                        key: statistics_method(value) for key, value in mapping.items()
+                    }
+                    result = []
+                    for category in self.independent_categories:
+                        result.append(mapping.get(category.pk))
+                    submission.independent_scores = result
             else:
                 reviews = [
                     review
@@ -86,7 +132,18 @@ class ReviewDashboard(EventPermissionRequired, Filterable, ListView):
                 ]
                 submission.current_score = None
                 if reviews:
-                    submission.current_score = reviews[0].score
+                    review = reviews[0]
+                    submission.current_score = review.score
+                    if self.independent_categories:
+                        mapping = {s.category_id: s.value for s in review.scores.all()}
+                        result = []
+                        for category in self.independent_categories:
+                            result.append(mapping.get(category.pk))
+                        submission.independent_scores = result
+                elif self.independent_categories:
+                    submission.independent_scores = [
+                        None for _ in range(len(self.independent_categories))
+                    ]
 
         return self.sort_queryset(queryset)
 
@@ -136,6 +193,16 @@ class ReviewDashboard(EventPermissionRequired, Filterable, ListView):
 
     @context
     @cached_property
+    def max_review_count(self):
+        return (
+            self.request.event.submissions.all()
+            .annotate(review_count=Count("reviews", distinct=True))
+            .aggregate(Max("review_count"))
+            .get("review_count__max")
+        )
+
+    @context
+    @cached_property
     def submissions_reviewed(self):
         return Review.objects.filter(
             user=self.request.user, submission__event=self.request.event
@@ -145,6 +212,13 @@ class ReviewDashboard(EventPermissionRequired, Filterable, ListView):
     @cached_property
     def show_submission_types(self):
         return self.request.event.submission_types.all().count() > 1
+
+    @context
+    @cached_property
+    def independent_categories(self):
+        return self.request.event.score_categories.all().filter(
+            is_independent=True, active=True
+        )
 
     @context
     @cached_property
@@ -227,11 +301,28 @@ class ReviewSubmission(PermissionRequired, CreateOrUpdateView):
 
     @cached_property
     def object(self):
-        return (
+        review = (
             self.submission.reviews.exclude(user__in=self.submission.speakers.all())
             .filter(user=self.request.user)
             .first()
         )
+        return review
+
+    @context
+    @cached_property
+    def review_display(self):
+        if self.object:
+            review = self.object
+            return {
+                "score": review.display_score,
+                "scores": self.get_scores_for_review(review),
+                "text": review.text,
+                "user": review.user.get_display_name(),
+                "answers": [
+                    review.answers.filter(question=question).first()
+                    for question in self.qform.queryset
+                ],
+            }
 
     @context
     @cached_property
@@ -269,11 +360,7 @@ class ReviewSubmission(PermissionRequired, CreateOrUpdateView):
     @context
     @cached_property
     def score_categories(self):
-        track = self.submission.track
-        track_filter = Q(limit_tracks__isnull=True)
-        if track:
-            track_filter |= Q(limit_tracks__in=[track])
-        return self.request.event.score_categories.filter(track_filter, active=True)
+        return self.submission.score_categories
 
     def get_scores_for_review(self, review):
         scores = []
@@ -420,15 +507,19 @@ class RegenerateDecisionMails(EventPermissionRequired, TemplateView):
     permission_required = "orga.change_submissions"
 
     def get_queryset(self):
-        return self.request.event.submissions.filter(
-            state__in=[SubmissionStates.ACCEPTED, SubmissionStates.REJECTED],
-            speakers__isnull=False,
+        return (
+            self.request.event.submissions.filter(
+                state__in=[SubmissionStates.ACCEPTED, SubmissionStates.REJECTED],
+                speakers__isnull=False,
+            )
+            .prefetch_related("speakers")
+            .distinct()
         )
 
     @context
     @cached_property
     def count(self):
-        return self.get_queryset().count()
+        return sum(len(proposal.speakers.all()) for proposal in self.get_queryset())
 
     def post(self, request, **kwargs):
         for submission in self.get_queryset():

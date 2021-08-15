@@ -13,13 +13,8 @@ body {
 
   #header-image {
     object-fit: cover;
-    margin-left: auto;
-    margin-right: auto;
+    width: 100%;
   }
-}
-
-#main-container {
-  padding-top: 100px;
 }
 
 h1 a {
@@ -37,6 +32,7 @@ header {
   align-items: flex-end;
   word-break: break-word;
   z-index: 1000;
+  height: 180px;
 }
 
 #header-row {
@@ -58,9 +54,7 @@ header {
 }
 
 #event-logo {
-  height: auto;
-  width: 100%;
-  margin-top: -50px;
+  max-height: 150px;
   margin-bottom: 8px;
 }
 
@@ -135,6 +129,9 @@ footer {
 
     header {
       padding: 10px 20px;
+      #event-logo {
+        max-height: 120px;
+      }
     }
 
     .user-row {

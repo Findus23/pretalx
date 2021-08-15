@@ -8,11 +8,10 @@ from urllib.parse import urlparse
 import pytz
 from django.db import models
 from django.utils.functional import cached_property
-from django.utils.translation import gettext_lazy as _
 from django_scopes import ScopedManager
 from i18nfield.fields import I18nCharField
 
-from pretalx.common.mixins import LogMixin
+from pretalx.common.mixins.models import LogMixin
 from pretalx.common.urls import get_base_url
 
 INSTANCE_IDENTIFIER = None
@@ -62,7 +61,7 @@ class TalkSlot(LogMixin, models.Model):
 
     @cached_property
     def event(self):
-        return self.submission.event
+        return self.submission.event if self.submission else self.schedule.event
 
     @property
     def duration(self) -> int:
@@ -92,9 +91,11 @@ class TalkSlot(LogMixin, models.Model):
     def real_end(self):
         """Guaranteed to provide a useful end datetime if ``start`` is set,
         even if ``end`` is empty."""
-        return self.end or (
+        result = self.end or (
             self.start + dt.timedelta(minutes=self.duration) if self.start else None
         )
+        if result:
+            return result.astimezone(self.event.tz)
 
     @cached_property
     def as_availability(self):
@@ -106,78 +107,9 @@ class TalkSlot(LogMixin, models.Model):
         from pretalx.schedule.models import Availability
 
         return Availability(
-            start=self.start, end=self.real_end, event=self.submission.event
+            start=self.start,
+            end=self.real_end,
         )
-
-    @cached_property
-    def warnings(self) -> list:
-        """A list of warnings that apply to this slot.
-
-        Warnings are dictionaries with a ``type`` (``room`` or
-        ``speaker``, for now) and a ``message`` fit for public display.
-        This property only shows availability based warnings.
-        """
-        if not self.start:
-            return []
-        warnings = []
-        availability = self.as_availability
-        if self.room:
-            if not any(
-                room_availability.contains(availability)
-                for room_availability in self.room.availabilities.all()
-            ):
-                warnings.append(
-                    {
-                        "type": "room",
-                        "message": _(
-                            "The room is not available at the scheduled time."
-                        ),
-                    }
-                )
-        for speaker in self.submission.speakers.all():
-            profile = speaker.event_profile(event=self.submission.event)
-            if profile.availabilities.exists() and not any(
-                speaker_availability.contains(availability)
-                for speaker_availability in profile.availabilities.all()
-            ):
-                warnings.append(
-                    {
-                        "type": "speaker",
-                        "speaker": {
-                            "name": speaker.get_display_name(),
-                            "id": speaker.pk,
-                        },
-                        "message": _(
-                            "A speaker is not available at the scheduled time."
-                        ),
-                    }
-                )
-            overlaps = (
-                TalkSlot.objects.filter(
-                    schedule=self.schedule, submission__speakers__in=[speaker]
-                )
-                .filter(
-                    models.Q(start__lt=self.start, end__gt=self.start)
-                    | models.Q(start__lt=self.end, end__gt=self.end)
-                    | models.Q(start__gt=self.start, end__lt=self.end)
-                )
-                .exists()
-            )
-            if overlaps:
-                warnings.append(
-                    {
-                        "type": "speaker",
-                        "speaker": {
-                            "name": speaker.get_display_name(),
-                            "id": speaker.pk,
-                        },
-                        "message": _(
-                            "A speaker is holding another session at the scheduled time."
-                        ),
-                    }
-                )
-
-        return warnings
 
     def copy_to_schedule(self, new_schedule, save=True):
         """Create a new slot for the given.

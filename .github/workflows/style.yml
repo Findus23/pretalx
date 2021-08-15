@@ -27,7 +27,7 @@ jobs:
       - uses: actions/cache@v1
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          key: ${{ runner.os }}-pip-${{ hashFiles('src/setup.py') }}
           restore-keys: |
             ${{ runner.os }}-pip-
       - name: Install Dependencies
@@ -47,7 +47,7 @@ jobs:
       - uses: actions/cache@v1
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          key: ${{ runner.os }}-pip-${{ hashFiles('src/setup.py') }}
           restore-keys: |
             ${{ runner.os }}-pip-
       - name: Install Dependencies
@@ -67,7 +67,7 @@ jobs:
       - uses: actions/cache@v1
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          key: ${{ runner.os }}-pip-${{ hashFiles('src/setup.py') }}
           restore-keys: |
             ${{ runner.os }}-pip-
       - name: Install Dependencies
@@ -87,13 +87,33 @@ jobs:
       - uses: actions/cache@v1
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          key: ${{ runner.os }}-pip-${{ hashFiles('src/setup.py') }}
           restore-keys: |
             ${{ runner.os }}-pip-
       - name: Install Dependencies
         run: pip3 install -Ue "src[dev]"
       - name: Run docformatter
         run: docformatter --check -r .
+        working-directory: ./src
+  djhtml:
+    name: djhtml
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Set up Python 3.8
+        uses: actions/setup-python@v1
+        with:
+          python-version: 3.8
+      - uses: actions/cache@v1
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('src/setup.py') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      - name: Install Dependencies
+        run: pip3 install -Ue "src[dev]"
+      - name: Run djhtml
+        run: 'find -name "*.html" | xargs djhtml -c'
         working-directory: ./src
   packaging:
     name: packaging
@@ -107,7 +127,7 @@ jobs:
       - uses: actions/cache@v1
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          key: ${{ runner.os }}-pip-${{ hashFiles('src/setup.py') }}
           restore-keys: |
             ${{ runner.os }}-pip-
       - name: Install Dependencies

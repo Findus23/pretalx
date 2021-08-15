@@ -22,8 +22,10 @@ from pretalx.submission.models import (
     Submission,
     SubmissionType,
     SubmitterAccessCode,
+    Tag,
     Track,
 )
+from pretalx.submission.models.question import QuestionRequired
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -188,7 +190,155 @@ def question(event):
             question="How much do you like green, on a scale from 1-10?",
             variant=QuestionVariant.NUMBER,
             target="submission",
-            required=False,
+            question_required=QuestionRequired.OPTIONAL,
+            contains_personal_data=False,
+            position=1,
+        )
+
+
+@pytest.fixture
+def question_required_always(event):
+    with scope(event=event):
+        return Question.objects.create(
+            event=event,
+            question="How much do you like green, on a scale from 1-10?",
+            variant=QuestionVariant.NUMBER,
+            target="submission",
+            question_required=QuestionRequired.REQUIRED,
+            contains_personal_data=False,
+            position=1,
+        )
+
+
+@pytest.fixture
+def question_required_after_option_before_deadline(event):
+    with scope(event=event):
+        utc = pytz.timezone(event.timezone)
+        date_of_deadline = dt.datetime.now().replace(tzinfo=utc) + dt.timedelta(weeks=4)
+        return Question.objects.create(
+            event=event,
+            question="How much do you like green, on a scale from 1-10?",
+            variant=QuestionVariant.NUMBER,
+            target="submission",
+            deadline=date_of_deadline,
+            question_required=QuestionRequired.AFTER_DEADLINE,
+            contains_personal_data=False,
+            position=1,
+        )
+
+
+@pytest.fixture
+def question_freeze_after_option_before_deadline_question_required_optional(event):
+    with scope(event=event):
+        utc = pytz.timezone(event.timezone)
+        date_of_freeze = dt.datetime.now().replace(tzinfo=utc) + dt.timedelta(weeks=4)
+        return Question.objects.create(
+            event=event,
+            question="How much do you like green, on a scale from 1-10?",
+            variant=QuestionVariant.NUMBER,
+            target="submission",
+            freeze_after=date_of_freeze,
+            question_required=QuestionRequired.OPTIONAL,
+            contains_personal_data=False,
+            position=1,
+        )
+
+
+@pytest.fixture
+def question_freeze_after_option_after_deadline_question_required_optional(event):
+    with scope(event=event):
+        utc = pytz.timezone(event.timezone)
+        date_of_freeze = dt.datetime.now().replace(tzinfo=utc) - dt.timedelta(weeks=4)
+        return Question.objects.create(
+            event=event,
+            question="How much do you like green, on a scale from 1-10?",
+            variant=QuestionVariant.NUMBER,
+            target="submission",
+            freeze_after=date_of_freeze,
+            question_required=QuestionRequired.OPTIONAL,
+            contains_personal_data=False,
+            position=1,
+        )
+
+
+@pytest.fixture
+def question_freeze_after_option_before_deadline_question_required_required(event):
+    with scope(event=event):
+        utc = pytz.timezone(event.timezone)
+        date_of_freeze = dt.datetime.now().replace(tzinfo=utc) + dt.timedelta(weeks=4)
+        return Question.objects.create(
+            event=event,
+            question="How much do you like green, on a scale from 1-10?",
+            variant=QuestionVariant.NUMBER,
+            target="submission",
+            freeze_after=date_of_freeze,
+            question_required=QuestionRequired.REQUIRED,
+            contains_personal_data=False,
+            position=1,
+        )
+
+
+@pytest.fixture
+def question_freeze_after_option_after_deadline_question_required_required(event):
+    with scope(event=event):
+        utc = pytz.timezone(event.timezone)
+        date_of_freeze = dt.datetime.now().replace(tzinfo=utc) - dt.timedelta(weeks=4)
+        return Question.objects.create(
+            event=event,
+            question="How much do you like green, on a scale from 1-10?",
+            variant=QuestionVariant.NUMBER,
+            target="submission",
+            freeze_after=date_of_freeze,
+            question_required=QuestionRequired.REQUIRED,
+            contains_personal_data=False,
+            position=1,
+        )
+
+
+@pytest.fixture
+def question_freeze_after_option_after_deadline(event):
+    with scope(event=event):
+        utc = pytz.timezone(event.timezone)
+        date_of_freeze = dt.datetime.now().replace(tzinfo=utc) - dt.timedelta(weeks=4)
+        return Question.objects.create(
+            event=event,
+            question="How much do you like green, on a scale from 1-10?",
+            variant=QuestionVariant.NUMBER,
+            target="submission",
+            freeze_after=date_of_freeze,
+            contains_personal_data=False,
+            position=1,
+        )
+
+
+@pytest.fixture
+def question_freeze_after_option_before_deadline(event):
+    with scope(event=event):
+        utc = pytz.timezone(event.timezone)
+        date_of_freeze = dt.datetime.now().replace(tzinfo=utc) + dt.timedelta(weeks=4)
+        return Question.objects.create(
+            event=event,
+            question="How much do you like green, on a scale from 1-10?",
+            variant=QuestionVariant.NUMBER,
+            target="submission",
+            freeze_after=date_of_freeze,
+            contains_personal_data=False,
+            position=1,
+        )
+
+
+@pytest.fixture
+def question_required_after_option_after_deadline(event):
+    with scope(event=event):
+        utc = pytz.timezone(event.timezone)
+        date_of_deadline = dt.datetime.now().replace(tzinfo=utc) - dt.timedelta(weeks=4)
+        return Question.objects.create(
+            event=event,
+            question="How much do you like green, on a scale from 1-10?",
+            variant=QuestionVariant.NUMBER,
+            target="submission",
+            deadline=date_of_deadline,
+            question_required=QuestionRequired.AFTER_DEADLINE,
             contains_personal_data=False,
             position=1,
         )
@@ -202,7 +352,7 @@ def inactive_question(event):
             question="So, on a scale from 1–100, how much do you like red?",
             variant=QuestionVariant.NUMBER,
             target="submission",
-            required=False,
+            question_required=QuestionRequired.OPTIONAL,
             active=False,
             position=2,
         )
@@ -224,7 +374,7 @@ def speaker_question(event):
             question="What is your favourite color?",
             variant=QuestionVariant.STRING,
             target="speaker",
-            required=False,
+            question_required=QuestionRequired.OPTIONAL,
             position=3,
         )
 
@@ -237,7 +387,7 @@ def review_question(event):
             question="What is your favourite color?",
             variant=QuestionVariant.STRING,
             target="reviewer",
-            required=True,
+            question_required=QuestionRequired.REQUIRED,
             position=4,
         )
 
@@ -250,7 +400,7 @@ def speaker_boolean_question(event):
             question="Do you like green?",
             variant=QuestionVariant.BOOLEAN,
             target="speaker",
-            required=False,
+            question_required=QuestionRequired.OPTIONAL,
             position=5,
         )
 
@@ -263,7 +413,7 @@ def boolean_question(event):
             question="Do you like green?",
             variant=QuestionVariant.BOOLEAN,
             target="submission",
-            required=False,
+            question_required=QuestionRequired.OPTIONAL,
             position=6,
         )
 
@@ -276,7 +426,7 @@ def file_question(event):
             question="Please submit your paper.",
             variant=QuestionVariant.FILE,
             target="submission",
-            required=False,
+            question_required=QuestionRequired.OPTIONAL,
             position=7,
         )
 
@@ -289,7 +439,7 @@ def speaker_file_question(event):
             question="Please submit your CV.",
             variant=QuestionVariant.FILE,
             target="speaker",
-            required=False,
+            question_required=QuestionRequired.OPTIONAL,
             position=8,
         )
 
@@ -302,7 +452,7 @@ def choice_question(event):
             question="How much do you like green?",
             variant=QuestionVariant.CHOICES,
             target="speaker",
-            required=False,
+            question_required=QuestionRequired.OPTIONAL,
             position=9,
         )
         for answer in ["very", "incredibly", "omggreen"]:
@@ -329,7 +479,7 @@ def multiple_choice_question(event):
             question="Which colors other than green do you like?",
             variant=QuestionVariant.MULTIPLE,
             target="speaker",
-            required=False,
+            question_required=QuestionRequired.OPTIONAL,
             position=10,
         )
         for answer in ["yellow", "blue", "black"]:
@@ -345,7 +495,7 @@ def speaker_text_question(event):
             question="Please elaborat on your like/dislike of green.",
             variant=QuestionVariant.TEXT,
             target="speaker",
-            required=False,
+            question_required=QuestionRequired.OPTIONAL,
             position=11,
         )
 
@@ -911,3 +1061,8 @@ def other_track(event):
 def access_code(event):
     with scope(event=event):
         return SubmitterAccessCode.objects.create(event=event)
+
+
+@pytest.fixture
+def tag(event):
+    return Tag.objects.create(tag="testtag", event=event)

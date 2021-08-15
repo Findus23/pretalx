@@ -6,7 +6,7 @@ from django.utils.translation import gettext_lazy as _
 from django_scopes.forms import SafeModelChoiceField
 
 from pretalx.cfp.forms.cfp import CfPFormMixin
-from pretalx.common.forms.fields import IMAGE_EXTENSIONS, ExtensionFileField
+from pretalx.common.forms.fields import ImageField
 from pretalx.common.forms.widgets import CheckboxMultiDropdown, MarkdownWidget
 from pretalx.common.mixins.forms import PublicContent, RequestRequire
 from pretalx.submission.forms.track_select_widget import TrackSelectWidget
@@ -21,9 +21,8 @@ class InfoForm(CfPFormMixin, RequestRequire, PublicContent, forms.ModelForm):
         ),
         required=False,
     )
-    image = ExtensionFileField(
+    image = ImageField(
         required=False,
-        extensions=IMAGE_EXTENSIONS,
         label=_("Session image"),
         help_text=_("Use this if you want an illustration to go with your proposal."),
     )
@@ -82,7 +81,7 @@ class InfoForm(CfPFormMixin, RequestRequire, PublicContent, forms.ModelForm):
                     pk=access_code.track.pk
                 )
             if len(self.fields["track"].queryset) == 1:
-                self.fields["track"].initial = self.fields["track"].queryset.first()
+                self.initial["track"] = self.fields["track"].queryset.first().pk
                 self.fields["track"].widget = forms.HiddenInput()
 
     def _set_submission_types(self, instance=None):
@@ -122,14 +121,14 @@ class InfoForm(CfPFormMixin, RequestRequire, PublicContent, forms.ModelForm):
             pk__in=pks
         )
         if len(pks) == 1:
-            self.fields["submission_type"].initial = self.event.submission_types.get(
-                pk=pks.pop()
+            self.initial["submission_type"] = (
+                self.fields["submission_type"].queryset.first().pk
             )
             self.fields["submission_type"].widget = forms.HiddenInput()
 
     def _set_locales(self):
         if len(self.event.locales) == 1:
-            self.fields["content_locale"].initial = self.event.locales[0]
+            self.initial["content_locale"] = self.event.locales[0]
             self.fields["content_locale"].widget = forms.HiddenInput()
         else:
             locale_names = dict(settings.LANGUAGES)
@@ -228,7 +227,7 @@ class SubmissionFilterForm(forms.Form):
             for d in qs.order_by("track").values("track").annotate(Count("track"))
         }
         tag_count = event.tags.prefetch_related("submissions").annotate(
-            submission_count=Count("submissions")
+            submission_count=Count("submissions", distinct=True)
         )
         tag_count = {tag.tag: tag.submission_count for tag in tag_count}
         self.fields["submission_type"].choices = [

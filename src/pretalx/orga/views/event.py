@@ -64,6 +64,7 @@ from pretalx.orga.signals import activate_event
 from pretalx.person.forms import LoginInfoForm, OrgaProfileForm, UserForm
 from pretalx.person.models import User
 from pretalx.submission.models import ReviewPhase, ReviewScoreCategory
+from pretalx.submission.tasks import recalculate_all_review_scores
 
 
 class EventSettingsPermission(EventPermissionRequired):
@@ -216,6 +217,9 @@ class EventLive(EventSettingsPermission, TemplateView):
                         data={},
                     )
                     messages.success(request, _("This event is now public."))
+                    for response in responses:
+                        if isinstance(response[1], str):
+                            messages.success(request, response[1])
         else:  # action == 'deactivate'
             if not event.is_public:
                 messages.success(request, _("This event was already hidden."))
@@ -264,6 +268,10 @@ class EventReviewSettings(EventSettingsPermission, ActionFromUrl, FormView):
         if not phases or not scores:
             return self.get(self.request, *self.args, **self.kwargs)
         form.save()
+        if self.scores_formset.has_changed():
+            recalculate_all_review_scores.apply_async(
+                kwargs={"event_id": self.request.event.pk}
+            )
         return super().form_valid(form)
 
     @context
@@ -488,6 +496,10 @@ class InvitationView(FormView):
     @cached_property
     def invitation(self):
         return get_object_or_404(TeamInvite, token__iexact=self.kwargs.get("code"))
+
+    @context
+    def password_reset_link(self):
+        return reverse("orga:auth.reset")
 
     def post(self, *args, **kwargs):
         if not self.request.user.is_anonymous:

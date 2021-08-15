@@ -29,6 +29,8 @@ document.addEventListener("DOMContentLoaded", function() {
     var editable = !Boolean(data_field.attr("disabled"))
 
     var data = JSON.parse(data_field.attr("value"))
+    let slotDuration = data_field.attr("resolution")
+    slotDuration = slotDuration || "00:30:00"
     var events = data.availabilities.map(function(e) {
       e.start = moment(e.start).tz(data.event.timezone)
       e.end = moment(e.end).tz(data.event.timezone)
@@ -39,6 +41,8 @@ document.addEventListener("DOMContentLoaded", function() {
 
       return e
     })
+    let localeData = document.querySelector("#calendar-locale")
+    const locale = localeData ? localeData.dataset.locale : "en"
     editor.fullCalendar({
       views: {
         agendaVariableDays: {
@@ -63,9 +67,11 @@ document.addEventListener("DOMContentLoaded", function() {
       navLinks: false,
       header: false,
       timeFormat: "H:mm",
+      slotDuration: slotDuration,
       slotLabelFormat: "H:mm",
       scrollTime: "09:00:00",
       selectable: editable,
+      locale: locale,
       selectHelper: true,
       select: function(start, end) {
         var wasInDeleteMode = false

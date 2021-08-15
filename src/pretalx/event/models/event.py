@@ -164,8 +164,7 @@ class Event(LogMixin, FileCleanupMixin, models.Model):
         verbose_name=_("Logo"),
         help_text=_(
             "If you provide a logo image, your event's name will not be shown in the event header. "
-            "The logo will be displayed left-aligned, and be allowed to grow up to the width of the"
-            "event content, if it is larger than that."
+            "The logo will be scaled down to a height of 150px."
         ),
     )
     header_image = models.FileField(
@@ -260,6 +259,7 @@ class Event(LogMixin, FileCleanupMixin, models.Model):
         user_submissions = "{user}submissions/"
         user_mails = "{user}mails/"
         schedule = "{base}schedule/"
+        schedule_nojs = "{schedule}nojs"
         featured = "{base}featured/"
         talks = "{base}talk/"
         speakers = "{base}speaker/"
@@ -270,7 +270,7 @@ class Event(LogMixin, FileCleanupMixin, models.Model):
         frab_json = "{export}schedule.json"
         frab_xcal = "{export}schedule.xcal"
         ical = "{export}schedule.ics"
-        widget_data_source = "{schedule}widget/v1.json"
+        widget_data = "{schedule}widget/v2.json"
 
     class orga_urls(EventUrls):
         create = "/orga/event/new"
@@ -329,6 +329,7 @@ class Event(LogMixin, FileCleanupMixin, models.Model):
         rooms = "{base}rooms/"
         questions = "{base}questions/"
         answers = "{base}answers/"
+        tags = "{base}tags/"
 
     class Meta:
         ordering = ("date_from",)
@@ -593,16 +594,35 @@ class Event(LogMixin, FileCleanupMixin, models.Model):
             question_map[question.pk] = question
             options = question.options.all()
             tracks = question.tracks.all().values_list("pk", flat=True)
+            types = question.submission_types.all().values_list("pk", flat=True)
             question.pk = None
             question.event = self
             question.save()
             question.tracks.set([])
+            question.submission_types.set([])
             for option in options:
                 option.pk = None
                 option.question = question
                 option.save()
             for track in tracks:
                 question.tracks.add(track_map.get(track))
+            for stype in types:
+                question.submission_types.add(submission_type_map.get(stype))
+
+        information_map = {}
+        for information in other_event.information.all():
+            information_map[information.pk] = information
+            tracks = information.limit_tracks.all().values_list("pk", flat=True)
+            types = information.limit_types.all().values_list("pk", flat=True)
+            information.pk = None
+            information.event = self
+            information.save()
+            information.limit_tracks.set([])
+            information.limit_types.set([])
+            for track in tracks:
+                information.limit_tracks.add(track_map.get(track))
+            for stype in types:
+                question.limit_types.add(submission_type_map.get(stype))
 
         for s in other_event.settings._objects.all():
             if s.value.startswith("file://") or s.key in protected_settings:
@@ -617,6 +637,7 @@ class Event(LogMixin, FileCleanupMixin, models.Model):
             question_map=question_map,
             track_map=track_map,
             submission_type_map=submission_type_map,
+            speaker_information_map=information_map,
         )
         self.build_initial_data()  # make sure we get a functioning event
 
@@ -750,7 +771,8 @@ class Event(LogMixin, FileCleanupMixin, models.Model):
         old_phase = self.active_review_phase
         if old_phase and old_phase.end and old_phase.end > _now:
             return old_phase
-        future_phases = future_phases.filter(position__gt=old_phase.position)
+        old_position = old_phase.position if old_phase else -1
+        future_phases = future_phases.filter(position__gt=old_position)
         next_phase = future_phases.order_by("position").first()
         if not (
             next_phase
@@ -759,8 +781,6 @@ class Event(LogMixin, FileCleanupMixin, models.Model):
             )
         ):
             return old_phase
-        old_phase.is_active = False
-        old_phase.save()
         next_phase.activate()
         return next_phase
 

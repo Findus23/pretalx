@@ -3,6 +3,7 @@ from urllib.parse import unquote
 
 import pytz
 from django.conf import settings
+from django.db.models import Q
 from django.http import Http404, HttpResponse, JsonResponse
 from django.utils.timezone import now
 from django.views.decorators.cache import cache_page
@@ -124,12 +125,12 @@ class WidgetData(ScheduleView):
 
 @condition(etag_func=widget_data_etag)
 @cache_page(60)
-def widget_data_v2(request, event):
+def widget_data_v2(request, event, version=None):
     event = request.event
     if not request.user.has_perm("agenda.view_widget", event):
         raise Http404()
 
-    version = unquote(request.GET.get("v") or "")
+    version = version or unquote(request.GET.get("v") or "")
     schedule = None
     if version and version == "wip":
         if not request.user.has_perm("orga.view_schedule", event):
@@ -146,12 +147,17 @@ def widget_data_v2(request, event):
         talks = schedule.talks.filter(is_visible=True)
     else:
         talks = schedule.talks.filter(
-            submission__state="confirmed", start__isnull=False, room__isnull=False
+            Q(submission__state="confirmed") | Q(submission__isnull=True),
+            start__isnull=False,
+            room__isnull=False,
         )
 
     talks = (
         talks.select_related(
-            "submission", "room", "submission__track"
+            "submission",
+            "room",
+            "submission__track",
+            "submission__event",
         ).prefetch_related("submission__speakers")
     ).order_by("start")
     rooms = set()
@@ -174,12 +180,14 @@ def widget_data_v2(request, event):
                     if talk.submission
                     else talk.description,
                     "abstract": talk.submission.abstract if talk.submission else None,
-                    "speakers": talk.submission.speakers.values_list("code", flat=True)
+                    "speakers": [
+                        speaker.code for speaker in talk.submission.speakers.all()
+                    ]
                     if talk.submission
                     else None,
                     "track": talk.submission.track_id if talk.submission else None,
                     "start": talk.start.astimezone(event.tz),
-                    "end": talk.end.astimezone(event.tz),
+                    "end": talk.real_end.astimezone(event.tz),
                     "room": talk.room_id,
                 }
             )
@@ -188,7 +196,7 @@ def widget_data_v2(request, event):
                 {
                     "title": talk.description,
                     "start": talk.start,
-                    "end": talk.end,
+                    "end": talk.real_end,
                     "room": talk.room_id,
                 }
             )

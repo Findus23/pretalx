@@ -6,9 +6,10 @@ from pretalx.api.serializers.submission import (
     SubmissionOrgaSerializer,
     SubmissionReviewerSerializer,
     SubmissionSerializer,
+    TagSerializer,
 )
 from pretalx.schedule.models import Schedule
-from pretalx.submission.models import Submission
+from pretalx.submission.models import Submission, Tag
 
 
 class SubmissionViewSet(viewsets.ReadOnlyModelViewSet):
@@ -32,9 +33,9 @@ class SubmissionViewSet(viewsets.ReadOnlyModelViewSet):
             ):
                 return Submission.objects.none()
             return self.request.event.submissions.filter(
-                slots__in=self.request.event.current_schedule.talks.filter(
+                pk__in=self.request.event.current_schedule.talks.filter(
                     is_visible=True
-                )
+                ).values_list("submission_id", flat=True)
             )
         return self.request.event.submissions.all()
 
@@ -44,6 +45,19 @@ class SubmissionViewSet(viewsets.ReadOnlyModelViewSet):
         if self.request.user.has_perm("orga.view_submissions", self.request.event):
             return SubmissionReviewerSerializer
         return SubmissionSerializer
+
+    def get_serializer(self, *args, **kwargs):
+        can_view_speakers = self.request.user.has_perm(
+            "agenda.view_schedule", self.request.event
+        ) or self.request.user.has_perm("orga.view_speakers", self.request.event)
+        if self.request.query_params.get("anon"):
+            can_view_speakers = False
+        return super().get_serializer(
+            *args,
+            can_view_speakers=can_view_speakers,
+            event=self.request.event,
+            **kwargs
+        )
 
 
 class ScheduleViewSet(viewsets.ReadOnlyModelViewSet):
@@ -94,3 +108,14 @@ class ScheduleViewSet(viewsets.ReadOnlyModelViewSet):
         if is_public:
             return self.request.event.schedules.filter(pk=current_schedule)
         return qs
+
+
+class TagViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = TagSerializer
+    queryset = Tag.objects.none()
+    lookup_field = "tag__iexact"
+
+    def get_queryset(self):
+        if self.request.user.has_perm("orga.view_submissions", self.request.event):
+            return self.request.event.tags.all()
+        return Tag.objects.none()

@@ -65,6 +65,8 @@ class SpeakerView(PermissionRequired, TemplateView):
     @context
     @cached_property
     def talks(self):
+        if not self.request.event.current_schedule:
+            return []
         return self.request.event.current_schedule.talks.filter(
             submission__speakers__code=self.kwargs["code"]
         )
@@ -117,9 +119,11 @@ class SpeakerTalksIcalView(PermissionRequired, DetailView):
         for slot in slots:
             slot.build_ical(cal)
 
-        resp = HttpResponse(cal.serialize(), content_type="text/calendar")
         speaker_name = Storage().get_valid_name(name=speaker.user.name)
-        resp[
-            "Content-Disposition"
-        ] = f'attachment; filename="{request.event.slug}-{safe_filename(speaker_name)}.ics"'
-        return resp
+        return HttpResponse(
+            cal.serialize(),
+            content_type="text/calendar",
+            headers={
+                "Content-Disposition": f'attachment; filename="{request.event.slug}-{safe_filename(speaker_name)}.ics"'
+            },
+        )

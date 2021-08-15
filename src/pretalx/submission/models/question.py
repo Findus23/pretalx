@@ -1,5 +1,6 @@
 from django.db import models
 from django.utils.functional import cached_property
+from django.utils.timezone import now
 from django.utils.translation import gettext_lazy as _
 from django_scopes import ScopedManager
 from i18nfield.fields import I18nCharField
@@ -61,6 +62,18 @@ class QuestionTarget(Choices):
     ]
 
 
+class QuestionRequired(Choices):
+    OPTIONAL = "optional"
+    REQUIRED = "required"
+    AFTER_DEADLINE = "after_deadline"
+
+    valid_choices = [
+        (OPTIONAL, _("always optional")),
+        (REQUIRED, _("always required")),
+        (AFTER_DEADLINE, _("required after a deadline")),
+    ]
+
+
 class Question(LogMixin, models.Model):
     """Questions can be asked per.
 
@@ -75,8 +88,17 @@ class Question(LogMixin, models.Model):
         ``QuestionVariant`` class.
     :param target: Can be any of 'submission', 'speaker', or 'reviewer'.
         Defined in the ``QuestionTarget`` class.
-    :param required: If this is ``True``, the answer must be given at
-        submission time. On boolean questions: must check box.
+    :param deadline: Datetime field. This field is required for 'after deadline' and 'freeze after' options of
+        question_required field and optional for the other ones. For 'after deadline' it shows that the answer will
+        be optional before the deadline and mandatory after that deadline. For 'freeze after' it shows that the
+        answer will be allowed before the deadline and frozen after that deadline
+    :param question_required: Can be any of 'none', 'require ', 'after deadline', or 'freeze after'.
+        Defined in the ``QuestionRequired`` class.
+        'required' answering this question will always be required.
+        'optional' means that it will never be mandatory.
+        'after deadline' the answer will be optional before the deadline and mandatory after the deadline.
+    :param freeze_after: Can be a datetime field or null.
+        For 'freeze after' the answer will be allowed before the deadline and frozen after the deadline.
     :param position: Position in the question order in this event.
     """
 
@@ -96,6 +118,26 @@ class Question(LogMixin, models.Model):
         help_text=_(
             "Do you require an answer from every speaker or for every session?"
         ),
+    )
+    deadline = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name=_("deadline"),
+        help_text=_(
+            "Set a deadline to make this question required after the given date."
+        ),
+    )
+    freeze_after = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name=_("freeze after"),
+        help_text=_("Set a deadline to stop changes to answers after the given date."),
+    )
+    question_required = models.CharField(
+        max_length=QuestionRequired.get_max_length(),
+        choices=QuestionRequired.get_choices(),
+        default=QuestionRequired.OPTIONAL,
+        verbose_name=_("question required"),
     )
     tracks = models.ManyToManyField(
         to="submission.Track",
@@ -128,7 +170,6 @@ class Question(LogMixin, models.Model):
     default_answer = models.TextField(
         null=True, blank=True, verbose_name=_("default answer")
     )
-    required = models.BooleanField(default=False, verbose_name=_("required"))
     position = models.IntegerField(default=0, verbose_name=_("position"))
     active = models.BooleanField(
         default=True,
@@ -174,6 +215,22 @@ class Question(LogMixin, models.Model):
     )
     objects = ScopedManager(event="event", _manager_class=QuestionManager)
     all_objects = ScopedManager(event="event", _manager_class=AllQuestionManager)
+
+    @cached_property
+    def required(self):
+        _now = now()
+        # Question should become optional in order to be frozen
+        if self.read_only:
+            return False
+        if self.question_required == QuestionRequired.REQUIRED:
+            return True
+        if self.question_required == QuestionRequired.AFTER_DEADLINE:
+            return self.deadline <= _now
+        return False
+
+    @property
+    def read_only(self):
+        return self.freeze_after and (self.freeze_after <= now())
 
     class urls(EventUrls):
         base = "{self.event.cfp.urls.questions}{self.pk}/"

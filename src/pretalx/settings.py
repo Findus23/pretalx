@@ -1,4 +1,5 @@
 import os
+import sys
 from contextlib import suppress
 from pathlib import Path
 from urllib.parse import urlparse
@@ -7,6 +8,7 @@ from django.contrib.messages import constants as messages
 from django.utils.crypto import get_random_string
 from django.utils.translation import gettext_lazy as _
 from pkg_resources import iter_entry_points
+
 from pretalx import __version__
 from pretalx.common.settings.config import build_config
 from pretalx.common.settings.utils import log_initial
@@ -119,6 +121,8 @@ STATIC_URL = config.get("site", "static")
 MEDIA_URL = config.get("site", "media")
 FILE_UPLOAD_DIRECTORY_PERMISSIONS = 0o755
 FILE_UPLOAD_DEFAULT_LIMIT = 10 * 1024 * 1024
+IMAGE_DEFAULT_MAX_WIDTH = 1920
+IMAGE_DEFAULT_MAX_HEIGHT = 1080
 
 
 ## SECURITY SETTINGS
@@ -126,13 +130,22 @@ SECURE_BROWSER_XSS_FILTER = True
 SECURE_CONTENT_TYPE_NOSNIFF = True
 SECURE_REFERRER_POLICY = "strict-origin-when-cross-origin"
 
-CSP_DEFAULT_SRC = "'self'"
-CSP_SCRIPT_SRC = ("'self'", "mtm.matomocamp.org")
-CSP_CONNECT_SRC = ("'self'", "mtm.matomocamp.org")
-CSP_STYLE_SRC = ("'self'", "'unsafe-inline'")
-CSP_IMG_SRC = ("'self'", "data:", "mtm.matomocamp.org")
-CSP_BASE_URI = "'none'"
-CSP_FORM_ACTION = "'self'"
+
+def merge_csp(*options, config=None):
+    result = list(options)
+    if config:
+        result += config.split(",")
+    return tuple(result)
+
+
+CSP_DEFAULT_SRC = merge_csp("'self'", config=config.get("site", "csp"))
+CSP_SCRIPT_SRC = merge_csp("'self'", config=config.get("site", "csp_script"))
+CSP_STYLE_SRC = merge_csp(
+    "'self'", "'unsafe-inline'", config=config.get("site", "csp_style")
+)
+CSP_IMG_SRC = merge_csp("'self'", "data:", config=config.get("site", "csp_img"))
+CSP_BASE_URI = ("'none'",)
+CSP_FORM_ACTION = merge_csp("'self'", config=config.get("site", "csp_form"))
 
 CSRF_COOKIE_NAME = "pretalx_csrftoken"
 CSRF_TRUSTED_ORIGINS = [urlparse(SITE_URL).hostname]
@@ -198,6 +211,7 @@ DATABASES = {
         else {},
     }
 }
+DEFAULT_AUTO_FIELD = "django.db.models.AutoField"
 
 
 ## LOGGING SETTINGS
@@ -357,19 +371,19 @@ LANGUAGES_INFORMATION = {
         "name": _("French"),
         "natural_name": "Français",
         "official": False,
-        "percentage": 93,
+        "percentage": 87,
     },
     "zh-tw": {
         "name": _("Traditional Chinese (Taiwan)"),
         "natural_name": "Traditional Chinese (Taiwan)",
         "official": False,
-        "percentage": 73,
+        "percentage": 69,
     },
     "ja-JP": {
         "name": _("Japanese"),
         "natural_name": "Japanese",
         "official": False,
-        "percentage": 96,
+        "percentage": 90,
         "public_code": "jp",
     },
 }
@@ -484,19 +498,26 @@ STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
 ## EXTERNAL APP SETTINGS
 with suppress(ImportError):
+    from rich.traceback import install
+
+    install(show_locals=True)
+
+with suppress(ImportError):
     import django_extensions  # noqa
 
     INSTALLED_APPS.append("django_extensions")
-with suppress(ImportError):
-    import debug_toolbar  # noqa
 
-    if DEBUG:
-        INSTALLED_APPS.append("debug_toolbar.apps.DebugToolbarConfig")
+if DEBUG:
+    with suppress(ImportError):
+        from debug_toolbar import settings as toolbar_settings  # noqa
+
+        INTERNAL_IPS = ["127.0.0.1", "0.0.0.0", "::1"]
+        INSTALLED_APPS.append("debug_toolbar")
         MIDDLEWARE.append("debug_toolbar.middleware.DebugToolbarMiddleware")
         DEBUG_TOOLBAR_PATCH_SETTINGS = False
         DEBUG_TOOLBAR_CONFIG = {
             "JQUERY_URL": "",
-            "DISABLE_PANELS": debug_toolbar.settings.PANELS_DEFAULTS,
+            "DISABLE_PANELS": toolbar_settings.PANELS_DEFAULTS,
         }
 BOOTSTRAP4 = {
     "field_renderers": {
@@ -555,11 +576,14 @@ if DEBUG:
 with suppress(ImportError):
     from .override_settings import *  # noqa
 
-log_initial(
-    debug=DEBUG,
-    config_files=CONFIG_FILES,
-    db_name=db_name,
-    db_backend=db_backend,
-    LOG_DIR=LOG_DIR,
-    plugins=PLUGINS,
-)
+if "--no-pretalx-information" in sys.argv:
+    sys.argv.remove("--no-pretalx-information")
+else:
+    log_initial(
+        debug=DEBUG,
+        config_files=CONFIG_FILES,
+        db_name=db_name,
+        db_backend=db_backend,
+        LOG_DIR=LOG_DIR,
+        plugins=PLUGINS,
+    )

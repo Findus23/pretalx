@@ -5,12 +5,12 @@ from django.core.exceptions import ValidationError
 from django.utils import timezone, translation
 from django.utils.functional import cached_property
 from django.utils.translation import gettext_lazy as _
+from django_scopes.forms import SafeModelChoiceField, SafeModelMultipleChoiceField
 from i18nfield.forms import I18nModelForm
 
 from pretalx.cfp.forms.cfp import CfPFormMixin
 from pretalx.common.forms.fields import (
-    IMAGE_EXTENSIONS,
-    ExtensionFileField,
+    ImageField,
     PasswordConfirmationField,
     PasswordField,
     SizeFileField,
@@ -20,6 +20,7 @@ from pretalx.common.mixins.forms import PublicContent, ReadOnlyFlag, RequestRequ
 from pretalx.common.phrases import phrases
 from pretalx.person.models import SpeakerInformation, SpeakerProfile, User
 from pretalx.schedule.forms import AvailabilitiesFormMixin
+from pretalx.submission.models import Question
 
 
 class UserForm(CfPFormMixin, forms.Form):
@@ -146,7 +147,11 @@ class SpeakerProfileForm(
                 {field: getattr(self.user, field) for field in self.user_fields}
             )
         for field in self.user_fields:
-            self.fields[field] = User._meta.get_field(field).formfield(
+            field_class = (
+                self.Meta.field_classes.get(field)
+                or User._meta.get_field(field).formfield
+            )
+            self.fields[field] = field_class(
                 initial=initial.get(field), disabled=read_only
             )
             self._update_cfp_help_text(field)
@@ -154,8 +159,8 @@ class SpeakerProfileForm(
         if not self.event.settings.cfp_request_avatar:
             self.fields.pop("avatar", None)
             self.fields.pop("get_gravatar", None)
-        elif "avatar" in self.fields:
-            self.fields["avatar"].extensions = IMAGE_EXTENSIONS
+        elif not self.event.settings.cfp_require_avatar and "avatar" in self.fields:
+            self.fields["avatar"].required = False
 
     @cached_property
     def user_fields(self):
@@ -206,8 +211,10 @@ class SpeakerProfileForm(
         model = SpeakerProfile
         fields = ("biography",)
         public_fields = ["name", "biography", "avatar"]
+        field_classes = {
+            "avatar": ImageField,
+        }
         widgets = {
-            "avatar": ExtensionFileField,
             "biography": MarkdownWidget,
         }
         request_require = {"biography", "availabilities"}
@@ -278,32 +285,38 @@ class LoginInfoForm(forms.ModelForm):
 
 
 class SpeakerInformationForm(I18nModelForm):
-    def clean(self):
-        result = super().clean()
-        if (
-            self.cleaned_data["include_submitters"]
-            and self.cleaned_data["exclude_unconfirmed"]
-        ):
-            self.add_error(
-                "exclude_unconfirmed",
-                ValidationError(
-                    _(
-                        "Either target all submitters or only confirmed speakers, these options are exclusive!"
-                    )
-                ),
-            )
-        return result
+    def __init__(self, *args, event=None, **kwargs):
+        self.event = event
+        super().__init__(*args, **kwargs)
+        self.fields["limit_types"].queryset = event.submission_types.all()
+        if not event.settings.use_tracks:
+            self.fields.pop("limit_tracks")
+        else:
+            self.fields["limit_tracks"].queryset = event.tracks.all()
+
+    def save(self, *args, **kwargs):
+        self.instance.event = self.event
+        return super().save(*args, **kwargs)
 
     class Meta:
         model = SpeakerInformation
         fields = (
             "title",
             "text",
-            "include_submitters",
-            "exclude_unconfirmed",
+            "target_group",
+            "limit_types",
+            "limit_tracks",
             "resource",
         )
-        field_classes = {"resource": SizeFileField}
+        field_classes = {
+            "limit_tracks": SafeModelMultipleChoiceField,
+            "limit_types": SafeModelMultipleChoiceField,
+            "resource": SizeFileField,
+        }
+        widgets = {
+            "limit_tracks": forms.CheckboxSelectMultiple,
+            "limit_types": forms.CheckboxSelectMultiple,
+        }
 
 
 class SpeakerFilterForm(forms.Form):
@@ -315,3 +328,8 @@ class SpeakerFilterForm(forms.Form):
         ),
         required=False,
     )
+    question = SafeModelChoiceField(queryset=Question.objects.none(), required=False)
+
+    def __init__(self, event, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["question"].queryset = event.questions.all()

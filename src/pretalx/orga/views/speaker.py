@@ -1,12 +1,13 @@
 from csp.decorators import csp_update
 from django.contrib import messages
 from django.db import transaction
+from django.db.models import Exists, OuterRef
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
 from django.utils.decorators import method_decorator
 from django.utils.functional import cached_property
 from django.utils.translation import gettext_lazy as _
-from django.views.generic import DetailView, ListView, View
+from django.views.generic import DetailView, FormView, ListView, View
 from django_context_decorator import context
 
 from pretalx.common.exceptions import SendMailException
@@ -17,7 +18,9 @@ from pretalx.common.mixins.views import (
     PermissionRequired,
     Sortable,
 )
+from pretalx.common.signals import register_data_exporters
 from pretalx.common.views import CreateOrUpdateView
+from pretalx.orga.forms.speaker import SpeakerExportForm
 from pretalx.person.forms import (
     SpeakerFilterForm,
     SpeakerInformationForm,
@@ -25,6 +28,7 @@ from pretalx.person.forms import (
 )
 from pretalx.person.models import SpeakerInformation, SpeakerProfile, User
 from pretalx.submission.forms import QuestionsForm
+from pretalx.submission.models import Answer
 from pretalx.submission.models.submission import Submission, SubmissionStates
 
 
@@ -40,12 +44,12 @@ class SpeakerList(EventPermissionRequired, Sortable, Filterable, ListView):
 
     @context
     def filter_form(self):
-        return SpeakerFilterForm(self.request.GET)
+        return SpeakerFilterForm(self.request.event, self.request.GET)
 
     def get_queryset(self):
         qs = SpeakerProfile.objects.filter(
             event=self.request.event, user__in=self.request.event.submitters
-        )
+        ).select_related("event", "user")
 
         qs = self.filter_queryset(qs)
         if "role" in self.request.GET:
@@ -68,6 +72,29 @@ class SpeakerList(EventPermissionRequired, Sortable, Filterable, ListView):
                     )
                 )
 
+        question = self.request.GET.get("question")
+        unanswered = self.request.GET.get("unanswered")
+        answer = self.request.GET.get("answer")
+        option = self.request.GET.get("answer__options")
+        if question and (answer or option):
+            if option:
+                answers = Answer.objects.filter(
+                    person_id=OuterRef("user_id"),
+                    question_id=question,
+                    options__pk=option,
+                )
+            else:
+                answers = Answer.objects.filter(
+                    person_id=OuterRef("user_id"),
+                    question_id=question,
+                    answer__exact=answer,
+                )
+            qs = qs.annotate(has_answer=Exists(answers)).filter(has_answer=True)
+        elif question and unanswered:
+            answers = Answer.objects.filter(
+                question_id=question, person_id=OuterRef("user_id")
+            )
+            qs = qs.annotate(has_answer=Exists(answers)).filter(has_answer=False)
         qs = qs.order_by("id").distinct()
         qs = self.sort_queryset(qs)
         return qs
@@ -109,10 +136,12 @@ class SpeakerDetail(PermissionRequired, ActionFromUrl, CreateOrUpdateView):
         )
 
     @context
+    @cached_property
     def submissions(self, **kwargs):
         return self.request.event.submissions.filter(speakers__in=[self.object])
 
     @context
+    @cached_property
     def mails(self):
         return self.object.mails.filter(
             sent__isnull=False, event=self.request.event
@@ -141,12 +170,11 @@ class SpeakerDetail(PermissionRequired, ActionFromUrl, CreateOrUpdateView):
     @transaction.atomic()
     def form_valid(self, form):
         result = super().form_valid(form)
-        self.questions_form.speaker = self.get_object()
         if not self.questions_form.is_valid():
             return self.get(self.request, *self.args, **self.kwargs)
         self.questions_form.save()
         if form.has_changed():
-            self.get_object().event_profile(self.request.event).log_action(
+            form.instance.log_action(
                 "pretalx.user.profile.update", person=self.request.user, orga=True
             )
         if form.has_changed() or self.questions_form.has_changed():
@@ -254,12 +282,8 @@ class InformationDetail(PermissionRequired, ActionFromUrl, CreateOrUpdateView):
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()
         kwargs.pop("read_only", None)
+        kwargs["event"] = self.request.event
         return kwargs
-
-    def form_valid(self, form):
-        if not getattr(form.instance, "event", None):
-            form.instance.event = self.request.event
-        return super().form_valid(form)
 
     def get_success_url(self):
         return self.request.event.orga_urls.information
@@ -278,3 +302,29 @@ class InformationDelete(PermissionRequired, DetailView):
         information.delete()
         messages.success(request, _("The information has been deleted."))
         return redirect(request.event.orga_urls.information)
+
+
+class SpeakerExport(EventPermissionRequired, FormView):
+    permission_required = "orga.view_speakers"
+    template_name = "orga/speaker/export.html"
+    form_class = SpeakerExportForm
+
+    def get_form_kwargs(self):
+        result = super().get_form_kwargs()
+        result["event"] = self.request.event
+        return result
+
+    @context
+    def exporters(self):
+        return list(
+            exporter(self.request.event)
+            for _, exporter in register_data_exporters.send(self.request.event)
+            if exporter.group == "speaker"
+        )
+
+    def form_valid(self, form):
+        result = form.export_data()
+        if not result:
+            messages.success(self.request, _("No data to be exported"))
+            return redirect(self.request.path)
+        return result

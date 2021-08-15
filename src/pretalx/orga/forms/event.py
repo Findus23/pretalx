@@ -14,10 +14,10 @@ from i18nfield.fields import I18nFormField, I18nTextarea
 from i18nfield.forms import I18nFormMixin, I18nModelForm
 
 from pretalx.common.css import validate_css
-from pretalx.common.forms.fields import IMAGE_EXTENSIONS, ExtensionFileField
+from pretalx.common.forms.fields import ImageField
 from pretalx.common.mixins.forms import ReadOnlyFlag
 from pretalx.common.phrases import phrases
-from pretalx.event.models.event import Event, Event_SettingsStore
+from pretalx.event.models.event import Event
 from pretalx.orga.forms.widgets import HeaderSelect, MultipleLanguagesWidget
 from pretalx.submission.models import ReviewPhase, ReviewScore, ReviewScoreCategory
 
@@ -33,25 +33,6 @@ class EventForm(ReadOnlyFlag, I18nModelForm):
             "Users will be able to use pretalx in these languages, and you will be able to provide all texts in these"
             " languages. If you don't provide a text in the language a user selects, it will be shown in your event's"
             " default language instead."
-        ),
-    )
-    logo = ExtensionFileField(
-        required=False,
-        extensions=IMAGE_EXTENSIONS,
-        label=_("Header image"),
-        help_text=_(
-            "If you provide a header image, it will be displayed instead of your event's color and/or header pattern "
-            "on top of all event pages. It will be center-aligned, so when the window shrinks, the center parts will "
-            "continue to be displayed, and not stretched."
-        ),
-    )
-    header_image = ExtensionFileField(
-        required=False,
-        extensions=IMAGE_EXTENSIONS,
-        label=_("Header image"),
-        help_text=_(
-            "If you provide a logo image, we will by default not show your event's name and date in the page header. "
-            "We will show your logo in its full size if possible, scaled down to the full header width otherwise."
         ),
     )
     custom_css_text = forms.CharField(
@@ -187,6 +168,10 @@ class EventForm(ReadOnlyFlag, I18nModelForm):
             "landing_page_text",
             "featured_sessions_text",
         ]
+        field_classes = {
+            "logo": ImageField,
+            "header_image": ImageField,
+        }
         widgets = {
             "date_from": forms.DateInput(attrs={"class": "datepickerfield"}),
             "date_to": forms.DateInput(
@@ -279,20 +264,6 @@ class EventSettingsForm(ReadOnlyFlag, I18nFormMixin, HierarkeyForm):
             raise ValidationError(
                 _("Please do not choose the default domain as custom event domain.")
             )
-        known_domains = [
-            domain.lower()
-            for domain in set(
-                Event_SettingsStore.objects.filter(key="custom_domain")
-                .exclude(object=self.obj)
-                .values_list("value", flat=True)
-            )
-            if domain
-        ]
-        parsed_domains = [urlparse(domain).hostname for domain in known_domains]
-        if data in known_domains or data in parsed_domains:
-            raise ValidationError(
-                _("This domain is already in use for a different event.")
-            )
         if not data.startswith("https://"):
             data = data[len("http://") :] if data.startswith("http://") else data
             data = "https://" + data
@@ -309,11 +280,6 @@ class EventSettingsForm(ReadOnlyFlag, I18nFormMixin, HierarkeyForm):
 
 
 class MailSettingsForm(ReadOnlyFlag, I18nFormMixin, HierarkeyForm):
-    mail_from = forms.EmailField(
-        label=_("Sender address"),
-        help_text=_("Sender address for outgoing emails."),
-        required=False,
-    )
     mail_reply_to = forms.EmailField(
         label=_("Contact address"),
         help_text=_(
@@ -341,6 +307,11 @@ class MailSettingsForm(ReadOnlyFlag, I18nFormMixin, HierarkeyForm):
         help_text=_(
             "All mail related to your event will be sent over the SMTP server specified by you."
         ),
+        required=False,
+    )
+    mail_from = forms.EmailField(
+        label=_("Sender address"),
+        help_text=_("Sender address for outgoing emails."),
         required=False,
     )
     smtp_host = forms.CharField(label=_("Hostname"), required=False)
@@ -422,6 +393,12 @@ class ReviewSettingsForm(ReadOnlyFlag, I18nFormMixin, HierarkeyForm):
     )
     review_text_mandatory = forms.BooleanField(
         label=_("Require a review text"), required=False
+    )
+    review_score_aggregate = forms.ChoiceField(
+        label=_("Score aggregation method"),
+        required=True,
+        choices=(("median", _("Median")), ("mean", _("Average (mean)"))),
+        widget=forms.RadioSelect,
     )
     review_help_text = I18nFormField(
         label=_("Help text for reviewers"),
@@ -573,6 +550,7 @@ class ReviewScoreCategoryForm(I18nModelForm):
         model = ReviewScoreCategory
         fields = (
             "name",
+            "is_independent",
             "weight",
             "required",
             "active",

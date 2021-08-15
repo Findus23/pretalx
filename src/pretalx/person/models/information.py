@@ -20,15 +20,26 @@ class SpeakerInformation(LogMixin, FileCleanupMixin, models.Model):
     event = models.ForeignKey(
         to="event.Event", related_name="information", on_delete=models.CASCADE
     )
-    include_submitters = models.BooleanField(
-        verbose_name=_("Include all submitters"),
-        help_text=_("Show to every submitter regardless of their proposals' status"),
-        default=False,
+    target_group = models.CharField(
+        choices=(
+            ("submitters", _("All submitters")),
+            ("accepted", _("All accepted speakers")),
+            ("confirmed", _("Only confirmed speakers")),
+        ),
+        default="accepted",
+        max_length=11,
     )
-    exclude_unconfirmed = models.BooleanField(
-        verbose_name=_("Exclude unconfirmed speakers"),
-        help_text=_("Show to speakers only once they have confirmed attendance"),
-        default=False,
+    limit_tracks = models.ManyToManyField(
+        to="submission.Track",
+        verbose_name=_("Limit to tracks"),
+        blank=True,
+        help_text=_("Leave empty to show this information to all tracks."),
+    )
+    limit_types = models.ManyToManyField(
+        to="submission.SubmissionType",
+        verbose_name=_("Limit to proposal types"),
+        blank=True,
+        help_text=_("Leave empty to show this information for all proposal types."),
     )
     title = I18nCharField(verbose_name=_("Subject"), max_length=200)
     text = I18nTextField(verbose_name=_("Text"), help_text=phrases.base.use_markdown)

@@ -5,7 +5,7 @@ from django.db import models
 from django.utils.functional import cached_property
 from django_scopes import ScopedManager
 
-from pretalx.common.mixins import LogMixin
+from pretalx.common.mixins.models import LogMixin
 
 zerotime = dt.time(0, 0)
 
@@ -50,9 +50,7 @@ class Availability(LogMixin, models.Model):
         return f"Availability(event={event}, person={person}, room={room})"
 
     def __hash__(self):
-        return hash(
-            (getattr(self, "event", None), self.person, self.room, self.start, self.end)
-        )
+        return hash((self.person, self.room, self.start, self.end))
 
     def __eq__(self, other: "Availability") -> bool:
         """Comparisons like ``availability1 == availability2``.
@@ -63,7 +61,7 @@ class Availability(LogMixin, models.Model):
         return all(
             [
                 getattr(self, attribute, None) == getattr(other, attribute, None)
-                for attribute in ["event", "person", "room", "start", "end"]
+                for attribute in ["person", "room", "start", "end"]
             ]
         )
 

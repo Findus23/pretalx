@@ -28,7 +28,7 @@ from pretalx.common.mixins.views import (
 from pretalx.common.signals import register_data_exporters
 from pretalx.common.utils import safe_filename
 from pretalx.common.views import CreateOrUpdateView
-from pretalx.orga.forms.schedule import ScheduleReleaseForm
+from pretalx.orga.forms.schedule import ScheduleExportForm, ScheduleReleaseForm
 from pretalx.schedule.forms import QuickScheduleForm, RoomForm
 from pretalx.schedule.models import Availability, Room, TalkSlot
 from pretalx.schedule.utils import guess_schedule_version
@@ -51,16 +51,30 @@ class ScheduleView(EventPermissionRequired, TemplateView):
         return result
 
 
-class ScheduleExportView(EventPermissionRequired, TemplateView):
+class ScheduleExportView(EventPermissionRequired, FormView):
     template_name = "orga/schedule/export.html"
     permission_required = "orga.view_schedule"
+    form_class = ScheduleExportForm
+
+    def get_form_kwargs(self):
+        result = super().get_form_kwargs()
+        result["event"] = self.request.event
+        return result
 
     @context
     def exporters(self):
         return list(
             exporter(self.request.event)
             for _, exporter in register_data_exporters.send(self.request.event)
+            if exporter.group != "speaker"
         )
+
+    def form_valid(self, form):
+        result = form.export_data()
+        if not result:
+            messages.success(self.request, _("No data to be exported"))
+            return redirect(self.request.path)
+        return result
 
 
 class ScheduleExportTriggerView(EventPermissionRequired, View):
@@ -220,7 +234,7 @@ def serialize_break(slot):
     }
 
 
-def serialize_slot(slot):
+def serialize_slot(slot, warnings=None):
     base_data = serialize_break(slot)
     if slot.submission:
         submission_data = {
@@ -248,7 +262,7 @@ def serialize_slot(slot):
             "start": slot.start.isoformat() if slot.start else None,
             "end": slot.end.isoformat() if slot.end else None,
             "url": slot.submission.orga_urls.base,
-            "warnings": slot.warnings,
+            "warnings": warnings or [],
         }
         return {**base_data, **submission_data}
     return base_data
@@ -271,8 +285,9 @@ class TalkList(EventPermissionRequired, View):
         else:
             schedule = request.event.wip_schedule
 
+        warnings = schedule.get_all_talk_warnings()
         result["results"] = [
-            serialize_slot(slot)
+            serialize_slot(slot, warnings=warnings.get(slot))
             for slot in (
                 schedule.talks.all()
                 .select_related(
@@ -354,7 +369,10 @@ class TalkUpdate(PermissionRequired, View):
             talk.room = None
             talk.save(update_fields=["start", "end", "room"])
 
-        return JsonResponse(serialize_slot(talk))
+        with_speakers = self.request.event.settings.cfp_request_availabilities
+        warnings = talk.schedule.get_talk_warnings(talk, with_speakers=with_speakers)
+
+        return JsonResponse(serialize_slot(talk, warnings=warnings))
 
     def delete(self, request, event, pk):
         talk = self.get_object()

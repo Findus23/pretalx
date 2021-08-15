@@ -1,6 +1,5 @@
 from functools import partial
 
-from django.utils.functional import cached_property
 from i18nfield.rest_framework import I18nAwareModelSerializer
 from rest_framework.serializers import (
     Field,
@@ -12,7 +11,7 @@ from rest_framework.serializers import (
 from pretalx.api.serializers.question import AnswerSerializer
 from pretalx.api.serializers.speaker import SubmitterSerializer
 from pretalx.schedule.models import Schedule, TalkSlot
-from pretalx.submission.models import Resource, Submission, SubmissionStates
+from pretalx.submission.models import Resource, Submission, SubmissionStates, Tag
 
 
 class FileField(Field):
@@ -37,6 +36,11 @@ class ResourceSerializer(ModelSerializer):
 
 class SlotSerializer(I18nAwareModelSerializer):
     room = SlugRelatedField(slug_field="name", read_only=True)
+    end = SerializerMethodField()
+
+    @staticmethod
+    def get_end(obj):
+        return obj.real_end
 
     class Meta:
         model = TalkSlot
@@ -60,14 +64,6 @@ class SubmissionSerializer(I18nAwareModelSerializer):
     def get_duration(obj):
         return obj.get_duration()
 
-    @cached_property
-    def can_view_speakers(self):
-        request = self.context.get("request")
-        return request and (
-            request.user.has_perm("agenda.view_schedule", request.event)
-            or request.user.has_perm("orga.view_speakers", request.event)
-        )
-
     def get_speakers(self, obj):
         has_slots = (
             obj.slots.filter(is_visible=True)
@@ -78,6 +74,7 @@ class SubmissionSerializer(I18nAwareModelSerializer):
                 obj.speakers.all(),
                 many=True,
                 context=self.context,
+                event=self.event,
             ).data
         return []
 
@@ -87,6 +84,8 @@ class SubmissionSerializer(I18nAwareModelSerializer):
         return obj.anonymised.get(attribute) or getattr(obj, attribute, None)
 
     def __init__(self, *args, **kwargs):
+        self.can_view_speakers = kwargs.pop("can_view_speakers", False)
+        self.event = kwargs.pop("event", None)
         super().__init__(*args, **kwargs)
         for field in ("title", "abstract", "description"):
             setattr(self, f"get_{field}", partial(self.get_attribute, attribute=field))
@@ -113,12 +112,22 @@ class SubmissionSerializer(I18nAwareModelSerializer):
         ]
 
 
+class TagSerializer(I18nAwareModelSerializer):
+    class Meta:
+        model = Tag
+        fields = ["tag", "description", "color"]
+
+
 class SubmissionOrgaSerializer(SubmissionSerializer):
     answers = AnswerSerializer(many=True)
+    tags = SerializerMethodField()
     created = SerializerMethodField()
 
     def get_created(self, obj):
         return obj.created.astimezone(obj.event.tz).isoformat()
+
+    def get_tags(self, obj):
+        return list(obj.tags.all().values_list("tag", flat=True))
 
     class Meta(SubmissionSerializer.Meta):
         fields = SubmissionSerializer.Meta.fields + [
@@ -126,6 +135,7 @@ class SubmissionOrgaSerializer(SubmissionSerializer):
             "answers",
             "notes",
             "internal_notes",
+            "tags",
         ]
 
 
