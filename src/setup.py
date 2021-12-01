@@ -156,7 +156,7 @@ setup(
         "mysql": ["mysqlclient"],
         "postgres": ["psycopg2-binary"],
         "redis": [
-            "django_redis~=5.0.0",
+            "django_redis>=5.0,<5.2",
             "redis~=3.5.0",
         ],
     },
