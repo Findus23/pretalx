@@ -1,3 +1,5 @@
+from django_filters import rest_framework as filters
+from django_scopes import scopes_disabled
 from rest_framework import viewsets
 
 from pretalx.api.serializers.submission import (
@@ -9,15 +11,24 @@ from pretalx.api.serializers.submission import (
     TagSerializer,
 )
 from pretalx.schedule.models import Schedule
-from pretalx.submission.models import Submission, Tag
+from pretalx.submission.models import Submission, SubmissionStates, Tag
+
+with scopes_disabled():
+
+    class SubmissionFilter(filters.FilterSet):
+        state = filters.MultipleChoiceFilter(choices=SubmissionStates.get_choices())
+
+        class Meta:
+            model = Submission
+            fields = ("state", "content_locale", "submission_type")
 
 
 class SubmissionViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = SubmissionSerializer
     queryset = Submission.objects.none()
     lookup_field = "code__iexact"
-    filterset_fields = ("state", "content_locale", "submission_type")
     search_fields = ("title", "speakers__name")
+    filterset_class = SubmissionFilter
 
     def get_queryset(self):
         if self.request._request.path.endswith(
@@ -76,7 +87,7 @@ class ScheduleViewSet(viewsets.ReadOnlyModelViewSet):
         except Exception:
             is_public = (
                 self.request.event.is_public
-                and self.request.event.settings.show_schedule
+                and self.request.event.feature_flags["show_schedule"]
             )
             has_perm = self.request.user.has_perm(
                 "orga.edit_schedule", self.request.event
@@ -95,7 +106,8 @@ class ScheduleViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         qs = self.queryset
         is_public = (
-            self.request.event.is_public and self.request.event.settings.show_schedule
+            self.request.event.is_public
+            and self.request.event.feature_flags["show_schedule"]
         )
         current_schedule = (
             self.request.event.current_schedule.pk

@@ -18,6 +18,12 @@ Core
 .. automodule:: pretalx.submission.signals
    :members: submission_state_change
 
+.. automodule:: pretalx.schedule.signals
+   :members: schedule_release
+
+.. automodule:: pretalx.mail.signals
+   :members: register_mail_placeholders
+
 Exporters
 ---------
 

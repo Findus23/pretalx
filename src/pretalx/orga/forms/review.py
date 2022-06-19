@@ -1,3 +1,5 @@
+from functools import partial
+
 from django import forms
 from django.utils.translation import gettext_lazy as _
 from django_scopes.forms import SafeModelMultipleChoiceField
@@ -5,7 +7,6 @@ from django_scopes.forms import SafeModelMultipleChoiceField
 from pretalx.common.forms.widgets import MarkdownWidget
 from pretalx.common.mixins.forms import ReadOnlyFlag
 from pretalx.common.phrases import phrases
-from pretalx.orga.forms.widgets import TagWidget
 from pretalx.submission.models import Review, Submission
 
 
@@ -25,7 +26,7 @@ class TagsForm(ReadOnlyFlag, forms.ModelForm):
             "tags",
         ]
         widgets = {
-            "tags": TagWidget,
+            "tags": forms.SelectMultiple(attrs={"class": "select2"}),
         }
         field_classes = {
             "tags": SafeModelMultipleChoiceField,
@@ -38,6 +39,10 @@ class ReviewForm(ReadOnlyFlag, forms.ModelForm):
         self.categories = categories
 
         super().__init__(*args, instance=instance, **kwargs)
+
+        # We validate existing score/text server-side to allow form-submit to skip/abstain
+        self.fields["text"].required = False
+
         self.scores = (
             {
                 score.category: score.id
@@ -53,9 +58,13 @@ class ReviewForm(ReadOnlyFlag, forms.ModelForm):
                 initial=self.scores.get(category),
             )
             self.fields[f"score_{category.id}"].widget.attrs["autocomplete"] = "off"
+            setattr(
+                self,
+                f"clean_score_{category.id}",
+                partial(self._clean_score_category, category),
+            )
         self.fields["text"].widget.attrs["rows"] = 2
         self.fields["text"].widget.attrs["placeholder"] = phrases.orga.example_review
-        self.fields["text"].required = event.settings.review_text_mandatory
         self.fields["text"].help_text += " " + phrases.base.use_markdown
 
     def build_score_field(self, category, read_only=False, initial=None):
@@ -65,7 +74,7 @@ class ReviewForm(ReadOnlyFlag, forms.ModelForm):
 
         return forms.ChoiceField(
             choices=choices,
-            required=category.required,
+            required=False,
             widget=forms.RadioSelect,
             disabled=read_only,
             initial=initial,
@@ -75,6 +84,18 @@ class ReviewForm(ReadOnlyFlag, forms.ModelForm):
     def get_score_fields(self):
         for category in self.categories:
             yield self[f"score_{category.id}"]
+
+    def clean_text(self):
+        text = self.cleaned_data.get("text")
+        if not text and self.event.review_settings["text_mandatory"]:
+            raise forms.ValidationError(_("Please provide a review text!"))
+        return text
+
+    def _clean_score_category(self, category):
+        score = self.cleaned_data.get(f"score_{category.id}")
+        if score in ("", None) and category.required:
+            raise forms.ValidationError(_("Please provide a review score!"))
+        return score
 
     def save(self, *args, **kwargs):
         instance = super().save(*args, **kwargs)
@@ -89,7 +110,7 @@ class ReviewForm(ReadOnlyFlag, forms.ModelForm):
 
     class Meta:
         model = Review
-        fields = ("text", "score")
+        fields = ("text",)
         widgets = {
             "text": MarkdownWidget,
         }

@@ -16,7 +16,6 @@ from django.db.models import Q
 from django.utils.crypto import get_random_string
 from django.utils.functional import cached_property
 from django.utils.timezone import now
-from django.utils.translation import get_language
 from django.utils.translation import gettext_lazy as _
 from django.utils.translation import override
 from django_scopes import scopes_disabled
@@ -276,8 +275,8 @@ class User(PermissionsMixin, GenerateCode, FileCleanupMixin, AbstractBaseUser):
         absolute URL."""
         if not self.avatar_url or "gravatar" in self.avatar_url:
             return self.avatar_url
-        if event and event.settings.custom_domain:
-            return urljoin(event.settings.custom_domain, self.avatar_url)
+        if event and event.custom_domain:
+            return urljoin(event.custom_domain, self.avatar_url)
         return urljoin(settings.SITE_URL, self.avatar_url)
 
     def get_events_with_any_permission(self):
@@ -384,10 +383,11 @@ All the best,
 the pretalx robot"""
             )
 
-        with override(get_language()):
+        with override(self.locale):
             mail = QueuedMail.objects.create(
                 subject=_("Password recovery"),
                 text=str(mail_text).format(**context),
+                locale=self.locale,
             )
             mail.to_users.add(self)
             mail.send()

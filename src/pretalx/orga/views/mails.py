@@ -1,10 +1,13 @@
+import bleach
 from django.contrib import messages
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.utils.functional import cached_property
 from django.utils.translation import gettext_lazy as _
 from django.views.generic import FormView, ListView, TemplateView, View
 from django_context_decorator import context
 
+from pretalx.common.mail import TolerantDict
 from pretalx.common.mixins.views import (
     ActionFromUrl,
     EventPermissionRequired,
@@ -12,11 +15,11 @@ from pretalx.common.mixins.views import (
     PermissionRequired,
     Sortable,
 )
+from pretalx.common.templatetags.rich_text import rich_text
+from pretalx.common.utils import language
 from pretalx.common.views import CreateOrUpdateView
-from pretalx.mail.context import get_context_explanation
 from pretalx.mail.models import MailTemplate, QueuedMail
 from pretalx.orga.forms.mails import MailDetailForm, MailTemplateForm, WriteMailForm
-from pretalx.person.models import User
 
 
 class OutboxList(EventPermissionRequired, Sortable, Filterable, ListView):
@@ -126,16 +129,29 @@ class MailDelete(PermissionRequired, TemplateView):
     def get_permission_object(self):
         return self.request.event
 
+    @cached_property
+    def queryset(self):
+        mail = self.request.event.queued_mails.filter(
+            sent__isnull=True, pk=self.kwargs.get("pk")
+        )
+        if "all" in self.request.GET and mail:
+            return self.request.event.queued_mails.filter(
+                sent__isnull=True, template=mail.first().template
+            )
+        return mail
+
     @context
     def question(self):
-        return _("Do you really want to delete this mail?")
+        if len(self.queryset) == 1:
+            return _("Do you really want to delete this mail?")
+        return _("Do you really want to purge {count} mails?").format(
+            count=len(self.queryset)
+        )
 
     def post(self, request, *args, **kwargs):
-        try:
-            mail = self.request.event.queued_mails.get(
-                sent__isnull=True, pk=self.kwargs.get("pk")
-            )
-        except QueuedMail.DoesNotExist:
+        mails = self.queryset
+        mail_count = len(mails)
+        if not mails:
             messages.error(
                 request,
                 _(
@@ -143,9 +159,15 @@ class MailDelete(PermissionRequired, TemplateView):
                 ),
             )
             return redirect(self.request.event.orga_urls.outbox)
-        mail.log_action("pretalx.mail.delete", person=self.request.user, orga=True)
-        mail.delete()
-        messages.success(request, _("The mail has been deleted."))
+        for mail in mails:
+            mail.log_action("pretalx.mail.delete", person=self.request.user, orga=True)
+            mail.delete()
+        if mail_count == 1:
+            messages.success(request, _("The mail has been deleted."))
+        else:
+            messages.success(
+                request, _("{count} mails have been purged.").format(count=mail_count)
+            )
         return redirect(request.event.orga_urls.outbox)
 
 
@@ -225,6 +247,19 @@ class MailCopy(PermissionRequired, View):
         return redirect(new_mail.urls.edit)
 
 
+class MailPreview(PermissionRequired, View):
+    permission_required = "orga.send_mails"
+
+    def get_object(self) -> QueuedMail:
+        return get_object_or_404(
+            self.request.event.queued_mails, pk=self.kwargs.get("pk")
+        )
+
+    def get(self, request, *args, **kwargs):
+        mail = self.get_object()
+        return HttpResponse(mail.make_html())
+
+
 class ComposeMail(EventPermissionRequired, FormView):
     form_class = WriteMailForm
     template_name = "orga/mails/send_form.html"
@@ -242,7 +277,6 @@ class ComposeMail(EventPermissionRequired, FormView):
                 initial["subject"] = template.subject
                 initial["text"] = template.text
                 initial["reply_to"] = template.reply_to
-                initial["bcc"] = template.bcc
         if "submission" in self.request.GET:
             submission = self.request.event.submissions.filter(
                 code=self.request.GET.get("submission")
@@ -257,93 +291,60 @@ class ComposeMail(EventPermissionRequired, FormView):
     def get_success_url(self):
         return self.request.event.orga_urls.compose_mails
 
+    def get_context_data(self, *args, **kwargs):
+        ctx = super().get_context_data(*args, **kwargs)
+        ctx["output"] = getattr(self, "output", None)
+        ctx["mail_count"] = getattr(self, "mail_count", None)
+        return ctx
+
     def form_valid(self, form):
-        user_set = set()
-        submissions = form.cleaned_data.get("submissions")
-        if submissions:
-            users = User.objects.filter(
-                submissions__in=self.request.event.submissions.filter(
-                    code__in=submissions
+        preview = self.request.POST.get("action") == "preview"
+        if preview:
+            self.output = {}
+            # Only approximate, good enough. Doesn't run deduplication, so it doesn't have to
+            # run rendering for all placeholders for all people, either.
+            result = form.get_recipient_submissions()
+            if not len(result):
+                messages.error(
+                    self.request,
+                    _("There are no proposals or sessions matching this selection."),
                 )
-            )
-            user_set.update(users)
-        tracks = form.cleaned_data.get("tracks")
-        if tracks:
-            users = User.objects.filter(
-                submissions__in=self.request.event.submissions.filter(
-                    track_id__in=tracks
-                )
-            )
-            user_set.update(users)
-        submission_types = form.cleaned_data.get("submission_types")
-        if submission_types:
-            users = User.objects.filter(
-                submissions__in=self.request.event.submissions.filter(
-                    submission_type_id__in=submission_types
-                )
-            )
-            user_set.update(users)
+                return self.get(self.request, *self.args, **self.kwargs)
+            for locale in self.request.event.locales:
+                with language(locale):
+                    context_dict = TolerantDict()
+                    for k, v in form.get_valid_placeholders().items():
+                        context_dict[
+                            k
+                        ] = '<span class="placeholder" title="{}">{}</span>'.format(
+                            _(
+                                "This value will be replaced based on dynamic parameters."
+                            ),
+                            v.render_sample(self.request.event),
+                        )
 
-        for recipient in form.cleaned_data.get("recipients"):
-            if recipient == "reviewers":
-                users = User.objects.filter(
-                    teams__in=self.request.event.teams.filter(is_reviewer=True)
-                ).distinct()
-            elif recipient == "no_slides":
-                users = User.objects.filter(
-                    submissions__in=self.request.event.submissions.filter(
-                        resources__isnull=True, state="confirmed"
+                    subject = bleach.clean(
+                        form.cleaned_data["subject"].localize(locale), tags=[]
                     )
-                )
-            else:
-                submission_filter = {"state": recipient}  # e.g. "submitted"
+                    preview_subject = subject.format_map(context_dict)
+                    message = form.cleaned_data["text"].localize(locale)
+                    preview_text = rich_text(message.format_map(context_dict))
 
-                users = User.objects.filter(
-                    submissions__in=self.request.event.submissions.filter(
-                        **submission_filter
-                    )
-                )
+                    self.output[locale] = {
+                        "subject": _("Subject: {subject}").format(
+                            subject=preview_subject
+                        ),
+                        "html": preview_text,
+                    }
+                    self.mail_count = len(result)
+            return self.get(self.request, *self.args, **self.kwargs)
 
-            user_set.update(users)
-
-        additional_mails = [
-            m.strip().lower()
-            for m in form.cleaned_data.get("additional_recipients", "").split(",")
-            if m.strip()
-        ]
-        users_found = 0
-        for email in additional_mails:
-            user = User.objects.filter(email__iexact=email).first()
-            if user:
-                user_set.add(user)
-                users_found += 1
-            else:
-                QueuedMail.objects.create(
-                    event=self.request.event,
-                    to=email,
-                    reply_to=form.cleaned_data.get(
-                        "reply_to", self.request.event.email
-                    ),
-                    cc=form.cleaned_data.get("cc"),
-                    bcc=form.cleaned_data.get("bcc"),
-                    subject=form.cleaned_data.get("subject"),
-                    text=form.cleaned_data.get("text"),
-                )
-        for user in user_set:
-            mail = QueuedMail.objects.create(
-                event=self.request.event,
-                reply_to=form.cleaned_data.get("reply_to", self.request.event.email),
-                cc=form.cleaned_data.get("cc"),
-                bcc=form.cleaned_data.get("bcc"),
-                subject=form.cleaned_data.get("subject"),
-                text=form.cleaned_data.get("text"),
-            )
-            mail.to_users.add(user)
+        result = form.save()
         messages.success(
             self.request,
             _(
                 "{count} emails have been saved to the outbox – you can make individual changes there or just send them all."
-            ).format(count=len(user_set) + len(additional_mails) - users_found),
+            ).format(count=len(result)),
         )
         return super().form_valid(form)
 
@@ -384,7 +385,7 @@ class TemplateList(EventPermissionRequired, TemplateView):
             )
             for template in self.request.event.mail_templates.exclude(
                 pk__in=[pk for pk in pks if pk]
-            )
+            ).exclude(is_auto_created=True)
         ]
         return result
 
@@ -400,7 +401,7 @@ class TemplateDetail(PermissionRequired, ActionFromUrl, CreateOrUpdateView):
     def placeholders(self):
         template = self.object
         if template and template in template.event.fixed_templates:
-            result = get_context_explanation()
+            result = {}
             if template == template.event.update_template:
                 result = [item for item in result if item["name"] == "event_name"]
                 result.append(
@@ -435,7 +436,7 @@ class TemplateDetail(PermissionRequired, ActionFromUrl, CreateOrUpdateView):
 
     def get_object(self) -> MailTemplate:
         return MailTemplate.objects.filter(
-            event=self.request.event, pk=self.kwargs.get("pk")
+            event=self.request.event, pk=self.kwargs.get("pk"), is_auto_created=False
         ).first()
 
     @cached_property

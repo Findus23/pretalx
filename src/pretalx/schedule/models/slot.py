@@ -53,6 +53,8 @@ class TalkSlot(LogMixin, models.Model):
     end = models.DateTimeField(null=True)
     description = I18nCharField(null=True)
 
+    updated = models.DateTimeField(auto_now=True)
+
     objects = ScopedManager(event="schedule__event")
 
     def __str__(self):
@@ -134,7 +136,7 @@ class TalkSlot(LogMixin, models.Model):
 
     @cached_property
     def id_suffix(self):
-        if not self.event.settings.present_multiple_times:
+        if not self.event.feature_flags["present_multiple_times"]:
             return ""
         all_slots = list(
             TalkSlot.objects.filter(

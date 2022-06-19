@@ -1,4 +1,5 @@
 import datetime as dt
+from functools import partial
 
 from django.db import models
 from django.utils.functional import cached_property
@@ -12,6 +13,65 @@ from pretalx.common.phrases import phrases
 from pretalx.common.urls import EventUrls
 
 
+def default_settings():
+    return {
+        "flow": {},
+        "count_length_in": "chars",
+        "show_deadline": True,
+    }
+
+
+def default_fields():
+    return {
+        "title": {
+            "visibility": "required",
+            "min_length": None,
+            "max_length": None,
+        },
+        "abstract": {
+            "visibility": "required",
+            "min_length": None,
+            "max_length": None,
+        },
+        "description": {
+            "visibility": "optional",
+            "min_length": None,
+            "max_length": None,
+        },
+        "biography": {
+            "visibility": "required",
+            "min_length": None,
+            "max_length": None,
+        },
+        "avatar": {"visibility": "optional"},
+        "availabilities": {"visibility": "optional"},
+        "notes": {"visibility": "optional"},
+        "do_not_record": {"visibility": "optional"},
+        "image": {"visibility": "optional"},
+        "track": {"visibility": "do_not_ask"},
+        "duration": {"visibility": "do_not_ask"},
+        "content_locale": {"visibility": "require"},
+    }
+
+
+def field_helper(cls):
+    def is_field_requested(self, field):
+        return self.fields[field]["visibility"] != "do_not_ask"
+
+    def is_field_required(self, field):
+        return self.fields[field]["visibility"] == "require"
+
+    for field in default_fields().keys():
+        setattr(
+            cls, f"request_{field}", property(partial(is_field_requested, field=field))
+        )
+        setattr(
+            cls, f"require_{field}", property(partial(is_field_required, field=field))
+        )
+    return cls
+
+
+@field_helper
 class CfP(LogMixin, models.Model):
     """Every :class:`~pretalx.event.models.event.Event` has one Call for
     Papers/Participation/Proposals.
@@ -43,6 +103,8 @@ class CfP(LogMixin, models.Model):
             "Please put in the last date you want to accept proposals from users."
         ),
     )
+    settings = models.JSONField(default=default_settings)
+    fields = models.JSONField(default=default_fields)
 
     objects = ScopedManager(event="event")
 
@@ -65,6 +127,12 @@ class CfP(LogMixin, models.Model):
     def __str__(self) -> str:
         """Help with debugging."""
         return f"CfP(event={self.event.slug})"
+
+    def copy_data_from(self, other_cfp):
+        # default_type gets set by event.copy_data_from
+        for field in ("headline", "text", "settings", "fields"):
+            setattr(self, field, getattr(other_cfp, field))
+        self.save()
 
     @cached_property
     def is_open(self) -> bool:

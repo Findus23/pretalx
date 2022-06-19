@@ -12,13 +12,15 @@ def env(event):
 
 @pytest.fixture
 def event_on_foobar(event):
-    event.settings.set("custom_domain", "https://foobar")
+    event.custom_domain = "https://foobar"
+    event.save()
     return event
 
 
 @pytest.fixture
 def event_on_custom_port(event):
-    event.settings.set("custom_domain", "https://foobar:8000")
+    event.custom_domain = "https://foobar:8000"
+    event.save()
     return event
 
 

@@ -24,8 +24,9 @@ def test_widget_pages(
     slot,
     other_slot,
 ):
-    event.settings.show_schedule = show_schedule
-    event.settings.show_widget_if_not_public = show_widget_if_not_public
+    event.feature_flags["show_schedule"] = show_schedule
+    event.feature_flags["show_widget_if_not_public"] = show_widget_if_not_public
+    event.save()
     response = client.get(event.urls.schedule + "widget/" + url, follow=True)
     assert response.status_code == expected
 
@@ -34,8 +35,8 @@ def test_widget_pages(
 @pytest.mark.parametrize(
     "version,queries",
     (
-        ("1", 19),
-        ("2", 21),
+        ("1", 8),
+        ("2", 10),
     ),
 )
 def test_widget_data(
@@ -46,10 +47,11 @@ def test_widget_data(
     other_slot,
     version,
     queries,
-    django_assert_max_num_queries,
+    django_assert_num_queries,
 ):
-    event.settings.show_schedule = True
-    with django_assert_max_num_queries(queries):
+    event.feature_flags["show_schedule"] = True
+    event.save()
+    with django_assert_num_queries(queries):
         response = client.get(
             event.urls.schedule + f"widget/v{version}.json", follow=True
         )

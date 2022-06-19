@@ -52,6 +52,9 @@ urlpatterns = [
                     organiser.OrganiserDelete.as_view(),
                     name="organiser.delete",
                 ),
+                path(
+                    "api/users", person.UserList.as_view(), name="organiser.user_list"
+                ),
                 path("teams/", organiser.TeamDetail.as_view(), name="organiser.teams"),
                 path(
                     "teams/new",
@@ -294,6 +297,11 @@ urlpatterns = [
                                 mails.OutboxSend.as_view(),
                                 name="mails.outbox.mail.send",
                             ),
+                            path(
+                                "preview",
+                                mails.MailPreview.as_view(),
+                                name="mails.outbox.mail.preview",
+                            ),
                         ]
                     ),
                 ),
@@ -364,6 +372,11 @@ urlpatterns = [
                     "submissions/feed/",
                     submission.SubmissionFeed(),
                     name="submissions.feed",
+                ),
+                path(
+                    "submissions/apply-pending/",
+                    submission.ApplyPending.as_view(),
+                    name="submissions.apply_pending",
                 ),
                 path(
                     "submissions/statistics/",

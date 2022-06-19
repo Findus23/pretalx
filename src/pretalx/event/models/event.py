@@ -63,6 +63,54 @@ def event_logo_path(instance, filename):
     return f"{instance.slug}/img/{path_with_hash(filename)}"
 
 
+def default_feature_flags():
+    return {
+        "show_schedule": True,
+        "show_featured": "pre_schedule",  # or always, or never
+        "show_widget_if_not_public": False,
+        "export_html_on_release": False,
+        "use_tracks": True,
+        "use_feedback": True,
+        "use_gravatar": True,
+        "present_multiple_times": False,
+    }
+
+
+def default_display_settings():
+    return {
+        "schedule": "grid",  # or list
+        "imprint_url": None,
+        "header_pattern": "",
+        "html_export_url": "",
+        "meta_noindex": False,
+    }
+
+
+def default_review_settings():
+    return {
+        "score_mandatory": False,
+        "text_mandatory": False,
+        "aggregate_method": "median",  # or mean
+    }
+
+
+def default_mail_settings():
+    return {
+        "mail_from": "",
+        "reply_to": "",
+        "signature": "",
+        "subject_prefix": "",
+        "smtp_use_custom": "",
+        "smtp_host": "",
+        "smtp_port": 587,
+        "smtp_username": "",
+        "smtp_password": "",
+        "smtp_use_tls": "",
+        "smtp_use_ssl": "",
+        "mail_on_new_submission": False,
+    }
+
+
 @hierarkey.add()
 class Event(LogMixin, FileCleanupMixin, models.Model):
     """The Event class has direct or indirect relations to all other models.
@@ -89,6 +137,7 @@ class Event(LogMixin, FileCleanupMixin, models.Model):
         ``#00ff00``.
     :param custom_css: Custom event CSS. Has to pass fairly restrictive
         validation for security considerations.
+    :param custom_domain: Custom event domain.
     :param logo: Replaces the event name in the public header. Will be
         displayed at up to full header height and up to full content width.
     :param header_image: Replaces the header pattern and/or background
@@ -136,6 +185,16 @@ class Event(LogMixin, FileCleanupMixin, models.Model):
         verbose_name=_("Organiser email address"),
         help_text=_("Will be used as Reply-To in emails."),
     )
+    custom_domain = models.URLField(
+        verbose_name=_("Custom domain"),
+        help_text=_("Enter a custom domain, such as https://my.event.example.org"),
+        null=True,
+        blank=True,
+    )
+    feature_flags = models.JSONField(default=default_feature_flags)
+    display_settings = models.JSONField(default=default_display_settings)
+    review_settings = models.JSONField(default=default_review_settings)
+    mail_settings = models.JSONField(default=default_mail_settings)
     primary_color = models.CharField(
         max_length=7,
         null=True,
@@ -296,6 +355,7 @@ class Event(LogMixin, FileCleanupMixin, models.Model):
         submission_feed = "{base}submissions/feed/"
         new_submission = "{submissions}new"
         feedback = "{submissions}feedback/"
+        apply_pending = "{submissions}apply-pending/"
         speakers = "{base}speakers/"
         settings = edit_settings = "{base}settings/"
         review_settings = "{settings}review/"
@@ -363,7 +423,7 @@ class Event(LogMixin, FileCleanupMixin, models.Model):
         from pretalx.common.signals import register_locales
 
         result = []
-        for receiver, locales in register_locales.send(sender=None):
+        for receiver, locales in register_locales.send(sender=self):
             result += locales
         return result
 
@@ -501,6 +561,7 @@ class Event(LogMixin, FileCleanupMixin, models.Model):
         self.question_template = self.question_template or MailTemplate.objects.create(
             event=self, subject=QUESTION_SUBJECT, text=QUESTION_TEXT
         )
+        # TODO clone other mail templates, but **not** the is_auto_created=True ones.
 
         if not self.review_phases.all().exists():
             from pretalx.submission.models import ReviewPhase
@@ -562,7 +623,6 @@ class Event(LogMixin, FileCleanupMixin, models.Model):
     def copy_data_from(self, other_event):
         from pretalx.orga.signals import event_copy_data
 
-        protected_settings = ["custom_domain", "display_header_data"]
         self._delete_mail_templates()
         self.submission_types.exclude(pk=self.cfp.default_type_id).delete()
         for template in self.template_names:
@@ -625,12 +685,13 @@ class Event(LogMixin, FileCleanupMixin, models.Model):
                 question.limit_types.add(submission_type_map.get(stype))
 
         for s in other_event.settings._objects.all():
-            if s.value.startswith("file://") or s.key in protected_settings:
+            if s.value.startswith("file://"):
                 continue
             s.object = self
             s.pk = None
             s.save()
         self.settings.flush()
+        self.cfp.copy_data_from(other_event.cfp)
         event_copy_data.send(
             sender=self,
             other=other_event.slug,
@@ -682,14 +743,14 @@ class Event(LogMixin, FileCleanupMixin, models.Model):
     def get_mail_backend(self, force_custom: bool = False) -> BaseEmailBackend:
         from pretalx.common.mail import CustomSMTPBackend
 
-        if self.settings.smtp_use_custom or force_custom:
+        if self.mail_settings["smtp_use_custom"] or force_custom:
             return CustomSMTPBackend(
-                host=self.settings.smtp_host,
-                port=self.settings.smtp_port,
-                username=self.settings.smtp_username,
-                password=self.settings.smtp_password,
-                use_tls=self.settings.smtp_use_tls,
-                use_ssl=self.settings.smtp_use_ssl,
+                host=self.mail_settings["smtp_host"],
+                port=self.mail_settings["smtp_port"],
+                username=self.mail_settings["smtp_username"],
+                password=self.mail_settings["smtp_password"],
+                use_tls=self.mail_settings["smtp_use_tls"],
+                use_ssl=self.mail_settings["smtp_use_ssl"],
                 fail_silently=False,
             )
         return get_connection(fail_silently=False)
@@ -893,6 +954,7 @@ class Event(LogMixin, FileCleanupMixin, models.Model):
                 subject=_("News from your content system"),
                 text=str(text).format(**context),
                 to=self.email,
+                locale=self.locale,
             ).send()
 
     @transaction.atomic
@@ -924,6 +986,7 @@ class Event(LogMixin, FileCleanupMixin, models.Model):
             (Question.all_objects.filter(event=self), False),
             (Submission.all_objects.filter(event=self), True),
             (self.tracks.all(), False),
+            (self.tags.all(), False),
             (self.submission_types.all(), False),
             (self.schedules.all(), False),
             (SpeakerProfile.objects.filter(event=self), False),

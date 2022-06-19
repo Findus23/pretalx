@@ -16,7 +16,12 @@ from pretalx.common.forms.fields import (
     SizeFileField,
 )
 from pretalx.common.forms.widgets import MarkdownWidget
-from pretalx.common.mixins.forms import PublicContent, ReadOnlyFlag, RequestRequire
+from pretalx.common.mixins.forms import (
+    I18nHelpText,
+    PublicContent,
+    ReadOnlyFlag,
+    RequestRequire,
+)
 from pretalx.common.phrases import phrases
 from pretalx.person.models import SpeakerInformation, SpeakerProfile, User
 from pretalx.schedule.forms import AvailabilitiesFormMixin
@@ -156,11 +161,13 @@ class SpeakerProfileForm(
             )
             self._update_cfp_help_text(field)
 
-        if not self.event.settings.cfp_request_avatar:
+        if not self.event.cfp.request_avatar:
             self.fields.pop("avatar", None)
             self.fields.pop("get_gravatar", None)
-        elif not self.event.settings.cfp_require_avatar and "avatar" in self.fields:
+        elif not self.event.cfp.require_avatar and "avatar" in self.fields:
             self.fields["avatar"].required = False
+        if not self.event.feature_flags["use_gravatar"]:
+            self.fields.pop("get_gravatar", None)
 
     @cached_property
     def user_fields(self):
@@ -183,8 +190,12 @@ class SpeakerProfileForm(
 
     def clean(self):
         data = super().clean()
-        if self.event.settings.cfp_require_avatar:
-            if not data.get("avatar") and not data.get("get_gravatar"):
+        if self.event.cfp.require_avatar:
+            if (
+                not data.get("avatar")
+                and not data.get("get_gravatar")
+                and not (self.user and self.user.has_avatar)
+            ):
                 raise ValidationError(
                     _(
                         "Please provide a profile picture or allow us to load your picture from gravatar!"
@@ -195,13 +206,17 @@ class SpeakerProfileForm(
     def save(self, **kwargs):
         for user_attribute in self.user_fields:
             value = self.cleaned_data.get(user_attribute)
-            if value is False and user_attribute == "avatar":
-                self.user.avatar = None
+            if user_attribute == "avatar":
+                if value is False:
+                    self.user.avatar = None
+                    # self.user.avatar = getattr(self.user, "avatar") or None  # Don't unset avatar in
+                elif value:
+                    self.user.avatar = value
             elif value is None and user_attribute == "get_gravatar":
                 self.user.get_gravatar = False
             else:
                 setattr(self.user, user_attribute, value)
-                self.user.save(update_fields=[user_attribute])
+            self.user.save(update_fields=[user_attribute])
 
         self.instance.event = self.event
         self.instance.user = self.user
@@ -284,12 +299,12 @@ class LoginInfoForm(forms.ModelForm):
         fields = ("email",)
 
 
-class SpeakerInformationForm(I18nModelForm):
+class SpeakerInformationForm(I18nHelpText, I18nModelForm):
     def __init__(self, *args, event=None, **kwargs):
         self.event = event
         super().__init__(*args, **kwargs)
         self.fields["limit_types"].queryset = event.submission_types.all()
-        if not event.settings.use_tracks:
+        if not event.feature_flags["use_tracks"]:
             self.fields.pop("limit_tracks")
         else:
             self.fields["limit_tracks"].queryset = event.tracks.all()
@@ -328,7 +343,9 @@ class SpeakerFilterForm(forms.Form):
         ),
         required=False,
     )
-    question = SafeModelChoiceField(queryset=Question.objects.none(), required=False)
+    question = SafeModelChoiceField(
+        queryset=Question.objects.none(), required=False, widget=forms.HiddenInput()
+    )
 
     def __init__(self, event, *args, **kwargs):
         super().__init__(*args, **kwargs)

@@ -1,5 +1,3 @@
-import json
-
 import pytest
 from django.http import HttpResponseNotAllowed
 from django_scopes import scope
@@ -75,9 +73,9 @@ def test_i18n_string(data, locales, expected):
 @pytest.mark.django_db
 def test_cfp_flow(event, data, expected):
     with scope(event=event):
-        assert event.settings.cfp_flow == ""
+        assert event.cfp.settings["flow"] == {}
         event.cfp_flow.save_config(event.cfp_flow.get_config(data))
-        assert json.loads(event.settings.cfp_flow) == expected
+        assert event.cfp.settings["flow"] == expected
         assert event.cfp_flow.get_config_json()
 
 

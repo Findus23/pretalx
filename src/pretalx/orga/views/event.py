@@ -51,7 +51,7 @@ from pretalx.event.forms import (
     EventWizardTimelineForm,
 )
 from pretalx.event.models import Event, Team, TeamInvite
-from pretalx.orga.forms import EventForm, EventSettingsForm
+from pretalx.orga.forms import EventForm
 from pretalx.orga.forms.event import (
     MailSettingsForm,
     ReviewPhaseForm,
@@ -89,18 +89,6 @@ class EventDetail(EventSettingsPermission, ActionFromUrl, UpdateView):
     def object(self):
         return self.request.event
 
-    @context
-    @cached_property
-    def sform(self):
-        return EventSettingsForm(
-            read_only=(self.action == "view"),
-            locales=self.request.event.locales,
-            obj=self.request.event,
-            attribute_name="settings",
-            data=self.request.POST if self.request.method == "POST" else None,
-            prefix="settings",
-        )
-
     def get_form_kwargs(self, *args, **kwargs):
         response = super().get_form_kwargs(*args, **kwargs)
         response["is_administrator"] = self.request.user.is_administrator
@@ -115,11 +103,8 @@ class EventDetail(EventSettingsPermission, ActionFromUrl, UpdateView):
 
     @transaction.atomic
     def form_valid(self, form):
-        if not self.sform.is_valid():
-            return self.form_invalid(form)
         result = super().form_valid(form)
 
-        self.sform.save()
         form.instance.log_action(
             "pretalx.event.update", person=self.request.user, orga=True
         )
@@ -159,8 +144,8 @@ class EventLive(EventSettingsPermission, TemplateView):
             )
         # TODO: test that mails can be sent
         if (
-            self.request.event.settings.use_tracks
-            and self.request.event.settings.cfp_request_track
+            self.request.event.feature_flags["use_tracks"]
+            and self.request.event.cfp.request_track
             and self.request.event.tracks.count() < 2
         ):
             suggestions.append(
@@ -446,7 +431,6 @@ class EventMailSettings(EventSettingsPermission, ActionFromUrl, FormView):
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()
         kwargs["obj"] = self.request.event
-        kwargs["attribute_name"] = "settings"
         kwargs["locales"] = self.request.event.locales
         return kwargs
 
@@ -456,7 +440,7 @@ class EventMailSettings(EventSettingsPermission, ActionFromUrl, FormView):
         if self.request.POST.get("test", "0").strip() == "1":
             backend = self.request.event.get_mail_backend(force_custom=True)
             try:
-                backend.test(self.request.event.settings.mail_from)
+                backend.test(self.request.event.mail_settings["mail_from"])
             except Exception as e:
                 messages.warning(
                     self.request,
@@ -504,7 +488,7 @@ class InvitationView(FormView):
     def post(self, *args, **kwargs):
         if not self.request.user.is_anonymous:
             self.accept_invite(self.request.user)
-            return redirect("/orga")
+            return redirect("/orga/event/")
         return super().post(*args, **kwargs)
 
     def form_valid(self, form):
@@ -521,7 +505,7 @@ class InvitationView(FormView):
 
         self.accept_invite(user)
         login(self.request, user, backend="django.contrib.auth.backends.ModelBackend")
-        return redirect("/orga")
+        return redirect("/orga/event/")
 
     @transaction.atomic()
     def accept_invite(self, user):
@@ -690,10 +674,7 @@ class EventWizard(PermissionRequired, SensibleBackWizardMixin, SessionWizardView
                 zone = timezone(event.timezone)
                 event.cfp.deadline = zone.localize(deadline.replace(tzinfo=None))
                 event.cfp.save()
-            for setting in [
-                "custom_domain",
-                "display_header_data",
-            ]:
+            for setting in ("display_header_data",):
                 value = steps["display"].get(setting)
                 if value:
                     event.settings.set(setting, value)
@@ -788,14 +769,13 @@ class WidgetSettings(EventPermissionRequired, FormView):
     template_name = "orga/settings/widget.html"
 
     def form_valid(self, form):
-        messages.success(self.request, _("The widget settings have been saved."))
         form.save()
+        messages.success(self.request, _("The widget settings have been saved."))
         return super().form_valid(form)
 
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()
         kwargs["obj"] = self.request.event
-        kwargs["attribute_name"] = "settings"
         return kwargs
 
     def get_context_data(self, **kwargs):

@@ -45,6 +45,7 @@ STATIC_ROOT = Path(
         fallback=BASE_DIR / "static.dist",
     )
 )
+IS_HTML_EXPORT = False
 HTMLEXPORT_ROOT = Path(
     config.get(
         "filesystem",
@@ -347,6 +348,7 @@ LOCALE_PATHS = (Path(__file__).resolve().parent / "locale",)
 FORMAT_MODULE_PATH = ["pretalx.common.formats"]
 
 LANGUAGE_CODE = config.get("locale", "language_code")
+LANGUAGE_COOKIE_NAME = "pretalx_language"
 LANGUAGES_INFORMATION = {
     "en": {
         "name": _("English"),
@@ -367,25 +369,48 @@ LANGUAGES_INFORMATION = {
         "percentage": 100,
         "public_code": "de",
     },
+    "es": {
+        "name": _("Spanish"),
+        "natural_name": "Español",
+        "official": False,
+        "percentage": 98,
+    },
+    "pt-BR": {
+        "name": _("Brasilian Portuguese"),
+        "natural_name": "Português brasileiro",
+        "official": False,
+        "percentage": 98,
+        "public_code": "pt",
+    },
     "fr": {
         "name": _("French"),
         "natural_name": "Français",
         "official": False,
-        "percentage": 87,
+        "percentage": 94,
     },
-    "zh-tw": {
-        "name": _("Traditional Chinese (Taiwan)"),
-        "natural_name": "Traditional Chinese (Taiwan)",
+    "ar": {
+        "name": _("Arabic"),
+        "natural_name": "اَلْعَرَبِيَّةُ",
         "official": False,
-        "percentage": 69,
+        "percentage": 89,
     },
     "ja-JP": {
         "name": _("Japanese"),
-        "natural_name": "Japanese",
+        "natural_name": "日本語",
         "official": False,
-        "percentage": 90,
+        "percentage": 85,
         "public_code": "jp",
     },
+    "zh-tw": {
+        "name": _("Traditional Chinese (Taiwan)"),
+        "natural_name": "漢語",
+        "official": False,
+        "percentage": 65,
+        "public_code": "zh",
+    },
+}
+LANGUAGES_RTL = {
+    "ar",
 }
 
 for section in config.sections():
@@ -529,12 +554,15 @@ BOOTSTRAP4 = {
 }
 COMPRESS_ENABLED = COMPRESS_OFFLINE = not DEBUG
 COMPRESS_PRECOMPILERS = (("text/x-scss", "django_libsass.SassCompiler"),)
-COMPRESS_CSS_FILTERS = (
-    # CssAbsoluteFilter is incredibly slow, especially when dealing with our _flags.scss
-    # However, we don't need it if we consequently use the static() function in Sass
-    # 'compressor.filters.css_default.CssAbsoluteFilter',
-    "compressor.filters.cssmin.CSSCompressorFilter",
-)
+COMPRESS_FILTERS = {
+    "js": ["compressor.filters.jsmin.rJSMinFilter"],
+    "css": (
+        # CssAbsoluteFilter is incredibly slow, especially when dealing with our _flags.scss
+        # However, we don't need it if we consequently use the static() function in Sass
+        # 'compressor.filters.css_default.CssAbsoluteFilter',
+        "compressor.filters.cssmin.CSSCompressorFilter",
+    ),
+}
 
 REST_FRAMEWORK = {
     "DEFAULT_RENDERER_CLASSES": (

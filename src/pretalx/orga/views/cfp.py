@@ -56,7 +56,6 @@ class CfPTextDetail(PermissionRequired, ActionFromUrl, UpdateView):
             read_only=(self.action == "view"),
             locales=self.request.event.locales,
             obj=self.request.event,
-            attribute_name="settings",
             data=self.request.POST if self.request.method == "POST" else None,
             prefix="settings",
         )
@@ -391,7 +390,6 @@ class CfPQuestionRemind(EventPermissionRequired, TemplateView):
         )
         data = {
             "url": request.event.urls.user_submissions.full(),
-            "event_name": request.event.name,
         }
         for person in people:
             missing = self.get_missing_answers(
@@ -402,7 +400,10 @@ class CfPQuestionRemind(EventPermissionRequired, TemplateView):
                     f"- {question.question}" for question in missing
                 )
                 request.event.question_template.to_mail(
-                    person, event=request.event, context=data
+                    person,
+                    event=request.event,
+                    context=data,
+                    context_kwargs={"user": person},
                 )
         return redirect(request.event.orga_urls.outbox)
 
@@ -698,7 +699,7 @@ class CfPFlowEditor(EventPermissionRequired, TemplateView):
             "current_configuration"
         ] = self.request.event.cfp_flow.get_editor_config(json_compat=True)
         context["event_configuration"] = {
-            "header_pattern": self.request.event.settings.display_header_pattern
+            "header_pattern": self.request.event.display_settings["header_pattern"]
             or "bg-primary",
             "header_image": self.request.event.header_image.url
             if self.request.event.header_image

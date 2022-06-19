@@ -1,20 +1,43 @@
-import datetime as dt
 import json
 
 from django import forms
 from django.conf import settings
+from django.utils.formats import get_format
 from django.utils.translation import gettext as _
 from django_scopes.forms import SafeModelChoiceField, SafeModelMultipleChoiceField
 
 from pretalx.common.forms.fields import ImageField
 from pretalx.common.mixins.forms import ReadOnlyFlag, RequestRequire
-from pretalx.orga.forms.widgets import TagWidget
 from pretalx.submission.models import Submission, SubmissionStates, SubmissionType
 
 
 class SubmissionForm(ReadOnlyFlag, RequestRequire, forms.ModelForm):
     def __init__(self, event, anonymise=False, **kwargs):
         self.event = event
+        initial_slot = {}
+        instance = kwargs.get("instance")
+        if instance and instance.pk:
+            slot = (
+                instance.slots.filter(schedule__version__isnull=True)
+                .select_related("room")
+                .order_by("start")
+                .first()
+            )
+            if slot:
+                datetime_format = get_format("DATETIME_INPUT_FORMATS")[0]
+                initial_slot = {
+                    "room": slot.room,
+                    "start": slot.start.astimezone(self.event.tz).strftime(
+                        datetime_format
+                    )
+                    if slot.start
+                    else "",
+                    "end": slot.real_end.astimezone(self.event.tz).strftime(
+                        datetime_format
+                    )
+                    if slot.real_end
+                    else "",
+                }
         if anonymise:
             kwargs.pop("initial", None)
             initial = {}
@@ -27,6 +50,7 @@ class SubmissionForm(ReadOnlyFlag, RequestRequire, forms.ModelForm):
                 if hasattr(initial[key], "all"):  # Tags, for the moment
                     initial[key] = initial[key].all()
             kwargs["initial"] = initial
+        kwargs["initial"].update(initial_slot)
         super().__init__(**kwargs)
         if "submission_type" in self.fields:
             self.fields["submission_type"].queryset = SubmissionType.objects.filter(
@@ -61,8 +85,15 @@ class SubmissionForm(ReadOnlyFlag, RequestRequire, forms.ModelForm):
                     choices=SubmissionStates.get_choices(),
                     initial=SubmissionStates.SUBMITTED,
                 )
+        if not self.instance.pk or self.instance.state in (
+            SubmissionStates.ACCEPTED,
+            SubmissionStates.CONFIRMED,
+        ):
             self.fields["room"] = forms.ModelChoiceField(
-                required=False, queryset=event.rooms.all(), label=_("Room")
+                required=False,
+                queryset=event.rooms.all(),
+                label=_("Room"),
+                initial=initial_slot.get("room"),
             )
             self.fields["start"] = forms.DateTimeField(
                 required=False,
@@ -70,13 +101,9 @@ class SubmissionForm(ReadOnlyFlag, RequestRequire, forms.ModelForm):
                 widget=forms.DateInput(
                     attrs={
                         "class": "datetimepickerfield",
-                        "data-date-start-date": event.date_from.isoformat(),
-                        "data-date-end-date": (
-                            event.date_to + dt.timedelta(days=1)
-                        ).isoformat(),
-                        "data-date-before": "#id_end",
                     }
                 ),
+                initial=initial_slot.get("start"),
             )
             self.fields["end"] = forms.DateTimeField(
                 required=False,
@@ -84,19 +111,15 @@ class SubmissionForm(ReadOnlyFlag, RequestRequire, forms.ModelForm):
                 widget=forms.DateInput(
                     attrs={
                         "class": "datetimepickerfield",
-                        "data-date-start-date": event.date_from.isoformat(),
-                        "data-date-end-date": (
-                            event.date_to + dt.timedelta(days=1)
-                        ).isoformat(),
-                        "data-date-after": "#id_start",
                     }
                 ),
+                initial=initial_slot.get("end"),
             )
         if "abstract" in self.fields:
             self.fields["abstract"].widget.attrs["rows"] = 2
-        if not event.settings.present_multiple_times:
+        if not event.feature_flags["present_multiple_times"]:
             self.fields.pop("slot_count", None)
-        if not event.settings.use_tracks:
+        if not event.feature_flags["use_tracks"]:
             self.fields.pop("track", None)
         elif "track" in self.fields:
             self.fields["track"].queryset = event.tracks.all()
@@ -111,21 +134,11 @@ class SubmissionForm(ReadOnlyFlag, RequestRequire, forms.ModelForm):
                 ]
 
     def save(self, *args, **kwargs):
+        if "content_locale" not in self.fields:
+            self.instance.content_locale = self.event.locale
         instance = super().save(*args, **kwargs)
         if self.is_creating:
             instance._set_state(self.cleaned_data["state"], force=True)
-            if instance.state in [
-                SubmissionStates.ACCEPTED,
-                SubmissionStates.CONFIRMED,
-            ]:
-                if self.cleaned_data.get("room") and self.cleaned_data.get("start"):
-                    slot = instance.slots.filter(
-                        schedule=instance.event.wip_schedule
-                    ).first()
-                    slot.room = self.cleaned_data.get("room")
-                    slot.start = self.cleaned_data.get("start")
-                    slot.end = self.cleaned_data.get("end")
-                    slot.save()
         else:
             if instance.pk and "duration" in self.changed_data:
                 instance.update_duration()
@@ -133,6 +146,25 @@ class SubmissionForm(ReadOnlyFlag, RequestRequire, forms.ModelForm):
                 instance.update_review_scores()
             if "slot_count" in self.changed_data and "slot_count" in self.initial:
                 instance.update_talk_slots()
+        if (
+            instance.state
+            in (
+                SubmissionStates.ACCEPTED,
+                SubmissionStates.CONFIRMED,
+            )
+            and self.cleaned_data.get("room")
+            and self.cleaned_data.get("start")
+            and any(field in self.changed_data for field in ("room", "start", "end"))
+        ):
+            slot = (
+                instance.slots.filter(schedule=instance.event.wip_schedule)
+                .order_by("start")
+                .first()
+            )
+            slot.room = self.cleaned_data.get("room")
+            slot.start = self.cleaned_data.get("start")
+            slot.end = self.cleaned_data.get("end")
+            slot.save()
         return instance
 
     class Meta:
@@ -154,7 +186,9 @@ class SubmissionForm(ReadOnlyFlag, RequestRequire, forms.ModelForm):
             "is_featured",
         ]
         widgets = {
-            "tags": TagWidget,
+            "tags": forms.SelectMultiple(attrs={"class": "select2"}),
+            "track": forms.Select(attrs={"class": "select2"}),
+            "submission_type": forms.Select(attrs={"class": "select2"}),
         }
         field_classes = {
             "submission_type": SafeModelChoiceField,
@@ -169,6 +203,7 @@ class SubmissionForm(ReadOnlyFlag, RequestRequire, forms.ModelForm):
             "notes",
             "image",
             "do_not_record",
+            "content_locale",
         }
 
 
@@ -208,3 +243,14 @@ class AnonymiseForm(SubmissionForm):
             "notes",
         ]
         request_require = fields
+
+
+class SubmissionStateChangeForm(forms.Form):
+    pending = forms.BooleanField(
+        label=_("Mark the new state as 'pending'?"),
+        help_text=_(
+            "If you mark state changes as pending, they won't be visible to speakers right away. You can always apply pending changes for some or all proposals in one go once you're ready to make your decisions public."
+        ),
+        required=False,
+        initial=False,
+    )

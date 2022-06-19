@@ -18,8 +18,8 @@ from pretalx.agenda.tasks import export_schedule_html
 from pretalx.common.mixins.models import LogMixin
 from pretalx.common.phrases import phrases
 from pretalx.common.urls import EventUrls
-from pretalx.mail.context import template_context_from_event
 from pretalx.person.models import SpeakerProfile, User
+from pretalx.schedule.signals import schedule_release
 from pretalx.submission.models import SubmissionStates
 
 
@@ -113,7 +113,9 @@ class Schedule(LogMixin, models.Model):
         with suppress(AttributeError):
             del wip_schedule.event.current_schedule
 
-        if self.event.settings.export_html_on_schedule_release:
+        schedule_release.send_robust(self.event, schedule=self, user=user)
+
+        if self.event.feature_flags["export_html_on_release"]:
             if settings.HAS_CELERY:
                 export_schedule_html.apply_async(kwargs={"event_id": self.event.id})
             else:
@@ -321,6 +323,13 @@ class Schedule(LogMixin, models.Model):
         )
         return result
 
+    @cached_property
+    def use_room_availabilities(self):
+        return any(
+            room.availabilities.all()
+            for room in self.event.rooms.all().prefetch_related("availabilities")
+        )
+
     def get_talk_warnings(
         self,
         talk,
@@ -340,7 +349,7 @@ class Schedule(LogMixin, models.Model):
             return []
         warnings = []
         availability = talk.as_availability
-        if talk.room:
+        if talk.room and self.use_room_availabilities:
             if room_avails is None:
                 room_avails = talk.room.availabilities.all()
             if not any(
@@ -355,6 +364,27 @@ class Schedule(LogMixin, models.Model):
                         ),
                     }
                 )
+        if talk.room:
+            overlaps = (
+                TalkSlot.objects.filter(schedule=self, room=talk.room)
+                .filter(
+                    models.Q(start__lt=talk.start, end__gt=talk.start)
+                    | models.Q(start__lt=talk.real_end, end__gt=talk.real_end)
+                    | models.Q(start__gt=talk.start, end__lt=talk.real_end)
+                )
+                .exclude(pk=talk.pk)
+                .exists()
+            )
+            if overlaps:
+                warnings.append(
+                    {
+                        "type": "room_overlap",
+                        "message": _(
+                            "There's an overlapping session scheduled in this room."
+                        ),
+                    }
+                )
+
         for speaker in talk.submission.speakers.all():
             if with_speakers:
                 profile = speaker.event_profile(event=self.event)
@@ -412,7 +442,7 @@ class Schedule(LogMixin, models.Model):
             "submission", "room"
         ).prefetch_related("submission__speakers")
         result = {}
-        with_speakers = self.event.settings.cfp_request_availabilities
+        with_speakers = self.event.cfp.request_availabilities
         room_avails = defaultdict(
             list,
             {
@@ -470,7 +500,7 @@ class Schedule(LogMixin, models.Model):
             ).count(),
             "no_track": [],
         }
-        if self.event.settings.use_tracks:
+        if self.event.feature_flags["use_tracks"]:
             warnings["no_track"] = talks.filter(
                 submission__track_id__isnull=True
             ).count()
@@ -513,15 +543,23 @@ class Schedule(LogMixin, models.Model):
         to be sent on schedule release."""
         mails = []
         for speaker in self.speakers_concerned:
-            with override(speaker.locale), tzoverride(self.tz):
+            locale = (
+                speaker.locale
+                if speaker.locale in self.event.locales
+                else self.event.locale
+            )
+            with override(locale), tzoverride(self.tz):
                 notifications = get_template(
                     "schedule/speaker_notification.txt"
                 ).render({"speaker": speaker, **self.speakers_concerned[speaker]})
-            context = template_context_from_event(self.event)
-            context["notifications"] = notifications
             mails.append(
                 self.event.update_template.to_mail(
-                    user=speaker, event=self.event, context=context, commit=save
+                    user=speaker,
+                    event=self.event,
+                    context_kwargs={"user": speaker},
+                    context={"notifications": notifications},
+                    commit=save,
+                    locale=locale,
                 )
             )
         return mails

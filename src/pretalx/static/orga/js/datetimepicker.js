@@ -1,8 +1,9 @@
 const setDates = (picker) => {
+  const format = $("body").attr("data-dateformat")
   const minDate = $(picker).attr("data-date-start-date")
   const maxDate = $(picker).attr("data-date-end-date")
-  if (minDate) $(picker).data("DateTimePicker").minDate(minDate)
-  if (maxDate) $(picker).data("DateTimePicker").maxDate(maxDate)
+  if (minDate) $(picker).data("DateTimePicker").minDate(moment(minDate, format))
+  if (maxDate) $(picker).data("DateTimePicker").maxDate(moment(maxDate, format))
 }
 $(function() {
   "use strict"
@@ -63,12 +64,12 @@ $(function() {
         let earlier = relatedDateAfter.val()
 
         if (earlier) {
-          earlier = moment(earlier)
+          earlier = moment(earlier, $("body").attr("data-dateformat"))
         } else {
           earlier = dateAfter
         }
         if (dateAfter && earlier) {
-          earlier = (moment(earlier).isBefore(moment(dateAfter)) ? dateAfter : earlier)
+          earlier = (moment(earlier, $("body").attr("data-dateformat")).isBefore(moment(dateAfter)) ? dateAfter : earlier)
         }
         if (
           current !== null &&
@@ -84,12 +85,12 @@ $(function() {
         let later = relatedDateBefore.val()
 
         if (later) {
-          later = moment(later)
+          later = moment(later, $("body").attr("data-dateformat"))
         } else {
           later = dateBefore
         }
         if (dateBefore && later) {
-          later = (moment(later).isAfter(moment(dateBefore)) ? dateBefore : later)
+          later = (moment(later, $("body").attr("data-dateformat")).isAfter(moment(dateBefore, $("body").attr("data-dateformat"))) ? dateBefore : later)
         }
         if (
           current !== null &&

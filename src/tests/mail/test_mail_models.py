@@ -32,7 +32,7 @@ def test_mail_template_model(mail_template):
 @pytest.mark.parametrize("commit", (True, False))
 @pytest.mark.django_db
 def test_mail_template_model_to_mail(mail_template, commit):
-    mail_template.to_mail("testdummy@example.org", None, commit=commit)
+    mail_template.to_mail("testdummy@exacmple.com", None, commit=commit)
 
 
 @pytest.mark.django_db
@@ -44,7 +44,7 @@ def test_mail_template_model_to_mail_fails_without_address(mail_template):
 @pytest.mark.django_db
 def test_mail_template_model_to_mail_shortens_subject(mail_template):
     mail_template.subject = "A" * 300
-    mail = mail_template.to_mail("testdummy@example.org", None, commit=False)
+    mail = mail_template.to_mail("testdummy@exacmple.com", None, commit=False)
     assert len(mail.subject) == 199
 
 
@@ -59,8 +59,9 @@ def test_mail_template_model_to_mail_shortens_subject(mail_template):
 )
 def test_mail_make_text(event, text, signature, expected):
     if signature:
-        event.settings.mail_signature = signature
-    assert QueuedMail.make_text(text, event) == expected
+        event.mail_settings["signature"] = signature
+        event.save()
+    assert QueuedMail(text=text, event=event).make_text() == expected
 
 
 @pytest.mark.django_db
@@ -74,5 +75,6 @@ def test_mail_make_text(event, text, signature, expected):
 )
 def test_mail_make_subject(event, text, prefix, expected):
     if prefix:
-        event.settings.mail_subject_prefix = prefix
-    assert QueuedMail.make_subject(text, event) == expected
+        event.mail_settings["subject_prefix"] = prefix
+        event.save()
+    assert QueuedMail(text=text, subject=text, event=event).make_subject() == expected

@@ -211,7 +211,8 @@ class TestWizard:
 
     @pytest.mark.django_db
     def test_wizard_new_user(self, event, question, client):
-        event.settings.set("mail_on_new_submission", True)
+        event.mail_settings["mail_on_new_submission"] = True
+        event.save()
         with scope(event=event):
             submission_type = SubmissionType.objects.filter(event=event).first()
             submission_type.deadline = event.cfp.deadline
@@ -238,7 +239,7 @@ class TestWizard:
             response,
             current_url,
             password="testpassw0rd!",
-            email="testuser@example.org",
+            email="testuser@example.com",
             register=True,
             event=event,
         )
@@ -246,7 +247,7 @@ class TestWizard:
             client, response, current_url, event=event
         )
         submission = self.assert_submission(event, question=question)
-        self.assert_user(submission, email="testuser@example.org")
+        self.assert_user(submission, email="testuser@example.com")
         assert len(djmail.outbox) == 2  # user email plus orga email
 
     @pytest.mark.django_db
@@ -316,7 +317,6 @@ class TestWizard:
         with scope(event=event):
             submission_type = SubmissionType.objects.filter(event=event).first().pk
             answer_data = {f"question_{question.pk}": "42"}
-            event.use_tracks = False
 
         client.force_login(user)
         response, current_url = self.perform_init_wizard(client, event=event)
@@ -355,14 +355,14 @@ class TestWizard:
             submission_type=submission_type,
             next_step="profile",
             event=event,
-            additional_speaker="additional@example.org",
+            additional_speaker="additional@example.com",
         )
         response, current_url = self.perform_profile_form(
             client, response, current_url, event=event
         )
         submission = self.assert_submission(event)
         user = self.assert_user(submission)
-        self.assert_mail(submission, user, extra="additional@example.org", count=2)
+        self.assert_mail(submission, user, extra="additional@example.com", count=2)
 
     @pytest.mark.django_db
     def test_wizard_logged_in_user_only_review_questions(
@@ -421,8 +421,8 @@ class TestWizard:
     def test_wizard_with_tracks(self, event, client, track, other_track):
         with scope(event=event):
             submission_type = SubmissionType.objects.filter(event=event).first().pk
-            event.settings.cfp_request_track = True
-            event.settings.cfp_require_track = True
+            event.cfp.fields["track"]["visibility"] = "required"
+            event.cfp.save()
 
         response, current_url = self.perform_init_wizard(client, event=event)
         response, current_url = self.perform_info_wizard(
@@ -439,7 +439,7 @@ class TestWizard:
             response,
             current_url,
             password="testpassw0rd!",
-            email="testuser@example.org",
+            email="testuser@example.com",
             register=True,
             event=event,
         )
@@ -447,7 +447,7 @@ class TestWizard:
             client, response, current_url, event=event
         )
         submission = self.assert_submission(event, track=track)
-        user = self.assert_user(submission, email="testuser@example.org")
+        user = self.assert_user(submission, email="testuser@example.com")
         self.assert_mail(submission, user)
 
     @pytest.mark.django_db
@@ -479,7 +479,7 @@ class TestWizard:
             response,
             current_url,
             password="testpassw0rd!",
-            email="testuser@example.org",
+            email="testuser@example.com",
             register=True,
             event=event,
         )
@@ -511,10 +511,9 @@ class TestWizard:
     ):
         with scope(event=event):
             submission_type = SubmissionType.objects.filter(event=event).first().pk
-            event.settings.cfp_request_track = True
-            event.settings.cfp_require_track = True
-            event.settings.cfp_request_abstract = False
-            event.settings.cfp_require_abstract = False
+            event.cfp.fields["track"]["visibility"] = "required"
+            event.cfp.fields["abstract"]["visibility"] = "do_not_ask"
+            event.cfp.save()
             track.requires_access_code = True
             track.save()
             question.tracks.add(track)
@@ -564,7 +563,7 @@ class TestWizard:
             response,
             current_url,
             password="testpassw0rd!",
-            email="testuser@example.org",
+            email="testuser@example.com",
             register=True,
             event=event,
         )
@@ -606,7 +605,7 @@ class TestWizard:
             response,
             current_url,
             password="testpassw0rd!",
-            email="testuser@example.org",
+            email="testuser@example.com",
             register=True,
             event=event,
         )

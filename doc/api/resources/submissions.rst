@@ -21,6 +21,7 @@ title                                 string                     The submission'
 submission_type                       multi-lingual string       The submission type
 track                                 multi-lingual string       The track this talk belongs to (e.g. "security", "design", or ``null``)
 state                                 string                     The submission's state, one of "submitted", "accepted", "rejected", "confirmed"
+pending_state                         string                     Only present for organisers, this field signals the next ``state`` a submission is planned to have.
 abstract                              string                     The abstract, a short note of the submission's content
 description                           string                     The description, a more expansive description of the submission's content
 duration                              number                     The talk's duration in minutes, or ``null``
@@ -115,7 +116,7 @@ Endpoints
    :query q: Search through submissions by title and speaker name
    :query anon: Send the ``anon`` parameter with any value to receive anonymised data even when you have permissions to see the full data set.
    :query submission_type: Filter submissions by submission type
-   :query state: Filter submission by state
+   :query state: Filter submission by state. Will filter by multiple states if you provide multiple state arguments.
 
 .. http:get:: /api/events/(event)/submissions/{code}
 

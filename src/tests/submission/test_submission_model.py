@@ -28,7 +28,7 @@ def test_accept_success(submission, state):
         submission.accept()
         assert submission.state == SubmissionStates.ACCEPTED
         assert submission.event.queued_mails.count() == int(
-            state != SubmissionStates.CONFIRMED
+            state not in (SubmissionStates.CONFIRMED, SubmissionStates.ACCEPTED)
         )
         assert submission.logged_actions().count() == (count + 1)
         assert submission.event.wip_schedule.talks.count() == 1
@@ -201,7 +201,7 @@ def test_make_submitted(submission, state):
         assert submission.state == SubmissionStates.SUBMITTED
         assert submission.event.queued_mails.count() == 0
         assert submission.event.wip_schedule.talks.count() == 0
-        assert submission.logged_actions().count() == 0
+        assert submission.logged_actions().count() == 1
 
 
 @pytest.mark.django_db
@@ -265,7 +265,8 @@ def test_submission_change_slot_count(accepted_submission):
             ).count()
             == 1
         )
-        accepted_submission.event.settings.present_multiple_times = True
+        accepted_submission.event.feature_flags["present_multiple_times"] = True
+        accepted_submission.event.save()
         accepted_submission.slot_count = 2
         accepted_submission.save()
         accepted_submission.accept()
@@ -351,7 +352,7 @@ def test_public_slots_without_schedule(submission):
     with scope(event=submission.event):
         submission.event.schedules.all().delete()
         submission.event.is_public = True
-        submission.event.settings.show_schedule = True
+        submission.event.feature_flags["show_schedule"] = True
         submission.event.save()
         assert submission.public_slots == []
 
@@ -360,7 +361,7 @@ def test_public_slots_without_schedule(submission):
 def test_public_slots_with_visible_agenda(submission, slot):
     with scope(event=submission.event):
         submission.event.is_public = True
-        submission.event.settings.show_schedule = True
+        submission.event.feature_flags["show_schedule"] = True
         submission.event.save()
         assert len(submission.public_slots) == 0
 
@@ -375,7 +376,7 @@ def test_content_for_mail(submission, file_question, boolean_question):
         fa = Answer.objects.create(
             question=file_question, answer_file=f, submission=submission
         )
-        host = submission.event.settings.custom_domain or settings.SITE_URL
+        host = submission.event.custom_domain or settings.SITE_URL
 
         assert (
             submission.get_content_for_mail().strip()
@@ -400,3 +401,42 @@ def test_send_invite_requires_signature(submission):
     with scope(event=submission.event):
         with pytest.raises(Exception):
             submission.send_invite(None)
+
+
+@pytest.mark.parametrize(
+    "state",
+    (
+        SubmissionStates.SUBMITTED,
+        SubmissionStates.ACCEPTED,
+        SubmissionStates.REJECTED,
+        SubmissionStates.CONFIRMED,
+        SubmissionStates.CANCELED,
+    ),
+)
+@pytest.mark.parametrize(
+    "pending_state",
+    (
+        SubmissionStates.SUBMITTED,
+        SubmissionStates.ACCEPTED,
+        SubmissionStates.REJECTED,
+        SubmissionStates.CONFIRMED,
+        SubmissionStates.CANCELED,
+    ),
+)
+@pytest.mark.django_db
+def test_pending_state(submission, state, pending_state):
+    with scope(event=submission.event):
+        submission.state = state
+        submission.pending_state = pending_state
+        submission.save()
+        count = submission.logged_actions().count()
+
+        submission.apply_pending_state(force=True)
+
+        assert submission.state == pending_state
+        assert submission.logged_actions().count() == (
+            count + int(state != pending_state)
+        )
+        if pending_state == "accepted" and state == "submitted":
+            assert submission.event.queued_mails.count() == 1
+            assert submission.event.wip_schedule.talks.count() == 1

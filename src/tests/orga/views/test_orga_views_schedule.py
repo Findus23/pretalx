@@ -1,5 +1,6 @@
 import datetime as dt
 import json
+from uuid import uuid4
 
 import pytest
 import pytz
@@ -434,18 +435,18 @@ def test_orga_cannot_reuse_schedule_name(orga_client, event):
 def test_orga_can_toggle_schedule_visibility(orga_client, event):
     from pretalx.event.models import Event
 
-    assert event.settings.show_schedule is True
+    assert event.feature_flags["show_schedule"] is True
 
     response = orga_client.get(event.orga_urls.toggle_schedule, follow=True)
     assert response.status_code == 200
     event = Event.objects.get(pk=event.pk)
-    assert event.settings.show_schedule is False
+    assert event.feature_flags["show_schedule"] is False
 
     response = orga_client.get(event.orga_urls.toggle_schedule, follow=True)
     assert response.status_code == 200
     event = Event.objects.get(pk=event.pk)
     with scope(event=event):
-        assert event.settings.show_schedule is True
+        assert event.feature_flags["show_schedule"] is True
 
 
 @pytest.mark.django_db
@@ -457,6 +458,7 @@ def test_create_room(orga_client, event, availability):
         follow=True,
         data={
             "name_0": "A room",
+            "guid": uuid4(),
             "availabilities": json.dumps(
                 {
                     "availabilities": [
@@ -487,7 +489,11 @@ def test_edit_room(orga_client, event, room):
     response = orga_client.post(
         room.urls.edit,
         follow=True,
-        data={"name_0": "A room", "availabilities": '{"availabilities": []}'},
+        data={
+            "name_0": "A room",
+            "guid": uuid4(),
+            "availabilities": '{"availabilities": []}',
+        },
     )
     assert response.status_code == 200
     with scope(event=event):

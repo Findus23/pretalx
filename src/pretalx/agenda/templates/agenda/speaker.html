@@ -14,7 +14,7 @@
         <div class="d-flex mb-2">
             <h3 class="heading-with-buttons">
                 {{ profile.user.get_display_name }}
-                <div class="buttons ml-auto">
+                <div class="buttons ml-auto flip">
                     <a class="btn btn-outline-primary" href="{{ profile.urls.talks_ical }}">
                         <i class="fa fa-calendar"></i> .ical
                     </a>
@@ -27,15 +27,10 @@
                     {{ profile.biography|rich_text }}
                 </div>
                 <div class="speaker-avatar">
-                    {% if profile.user.get_gravatar or profile.user.avatar %}
-                        <img width="100%"
-                            {% if profile.user.get_gravatar %}
-                                src="https://www.gravatar.com/avatar/{{ profile.user.gravatar_parameter }}?s=200"
-                            {% elif profile.user.avatar %}
-                                src="{{ profile.user.avatar.url }}"
-                            {% endif %}
-                            alt="{% translate "The speaker's profile picture" %}"
-                        >
+                    {% if profile.user.avatar %}
+                        <img width="100%" src="{{ profile.user.avatar.url }}" alt="{% translate "The speaker's profile picture" %}">
+                    {% elif profile.user.get_gravatar and request.event.feature_flags.use_gravatar %}
+                        <img width="100%" src="https://www.gravatar.com/avatar/{{ profile.user.gravatar_parameter }}?s=200" alt="{% translate "The speaker's profile picture" %}">
                     {% endif %}
                 </div>
             </section>

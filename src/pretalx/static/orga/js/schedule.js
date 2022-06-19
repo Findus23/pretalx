@@ -28,7 +28,7 @@ var api = {
         return Promise.reject(error)
       })
   },
-  fetchTalks() {
+  fetchTalks(since) {
     var url = [
       window.location.protocol,
       "//",
@@ -37,6 +37,9 @@ var api = {
       "api/talks/",
       window.location.search,
     ].join("")
+    if (since) {
+      url += `?since=${encodeURIComponent(since)}`
+    }
     return api.http("GET", url, null)
   },
   fetchRooms(eventSlug) {
@@ -122,11 +125,11 @@ var dragController = {
   stopDragging() {
     if (this.roomColumn) {
       this.roomColumn.classList.remove("hover-active")
-      this.dragSource.classList.remove("drag-source")
-      this.draggedTalk = null
-      this.event = null
-      this.startY = null
     }
+    this.dragSource.classList.remove("drag-source")
+    this.draggedTalk = null
+    this.event = null
+    this.startY = null
   },
   startModal(talk) {
     this.modalTalk = talk
@@ -447,7 +450,7 @@ var app = new Vue({
           <div class="alert alert-danger room-column" v-if="rooms && rooms.length < 1">
             Please configure some rooms first.
           </div>
-          <room v-for="room in rooms" :room="room" :talks="talks" :duration="duration" :start="start" :end="end" :key="room.id">
+          <room v-for="room in filteredRooms" :room="room" :talks="talks" :duration="duration" :start="start" :end="end" :key="room.id">
           </room>
         </div>
       </div>
@@ -471,15 +474,23 @@ var app = new Vue({
       rooms: null,
       start: null,
       end: null,
+      since: null,
       timezone: null,
       locales: null,
       loading: true,
       showUnassigned: true,
       search: "",
       dragController: dragController,
+      selectedRooms: [],
     }
   },
   created() {
+    $("#id_version").on("change", e => {
+      document.querySelector("#schedule-version").submit()
+    })
+    $("#id_room").on("change", e => {
+      this.updateRooms()
+    })
     api.fetchRooms(this.eventSlug).then(result => {
       this.rooms = result.results
     })
@@ -491,13 +502,16 @@ var app = new Vue({
         this.start = moment.tz(result.start, this.timezone)
         this.end = moment.tz(result.end, this.timezone)
         this.locales = result.locales
+        this.since = result.now
       })
+      .then(() => this.updateRooms())
       .then(() => {
         this.loading = false
         $(function() {
           $('[data-toggle="tooltip"]').tooltip()
         })
       })
+    window.setTimeout(this.pollUpdates, 10*1000)
   },
   computed: {
     currentDay() {},
@@ -535,6 +549,16 @@ var app = new Vue({
         })
       })
     },
+    filteredRooms() {
+      this.updateURL();
+
+      if (!this.rooms) return [];
+      if (this.selectedRooms.length === 0) return this.rooms;
+
+      return this.rooms.filter(room => {
+        return this.selectedRooms.includes(room.id);
+      })
+    },
     eventSlug() {
       const relevant = window.location.pathname.substring(12)
       return relevant.substring(0, relevant.indexOf("/"))
@@ -549,9 +573,39 @@ var app = new Vue({
     newTalk(talk) {
       this.talks.push(talk)
     },
-    saveTalk (response) {
+    saveTalk(response) {
       const talk = this.talks.find((talk) => talk.id == response.id)
       Object.assign(talk, response)
+    },
+    pollUpdates() {
+      console.log("polling updates")
+      if (this.since) {
+        api
+          .fetchTalks(this.since)
+          .then(result => {
+            if (result.results.length) {
+              console.log("got result")
+              console.log(result)
+            }
+            this.since = result.now
+            result.results.forEach((data) => {
+              const talk = this.talks.find((talk) => talk.id == data.id)
+              Object.assign(talk, data)
+            })
+            window.setTimeout(this.pollUpdates, 10*1000)
+          })
+      }
+    },
+    updateURL() {
+      let qp = new URLSearchParams(location.search);
+      qp.delete('room');
+      this.selectedRooms.forEach((r) => { qp.append('room', r) });
+      history.replaceState(null, null, "?" + qp.toString());
+    },
+    updateRooms() {
+      this.selectedRooms = [...document.querySelector("#id_room").options].filter(
+        option => option.selected
+      ).map(option => parseInt(option.value))
     },
     onMouseMove(event) {
       if (dragController.draggedTalk) {

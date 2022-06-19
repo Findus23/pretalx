@@ -3,6 +3,45 @@
 Release Notes
 =============
 
+- :release:`2.3.1 <2021-12-26>`
+- :bug:`1243` Fix bug in setting proposal start times.
+- :feature:`-` The new pending state feature is now available in custom JSON and CSV exports.
+- :release:`2.3.0 <2021-12-24>`
+- :feature:`667` Thanks to the new "pending state" feature, organisers and reviewers can mark proposals as accepted/rejected without letting speakers see the decision yet.
+- :feature:`1232` You can filter submissions by multiple states in the API now.
+- :support:`-` When updating, please take care to update your plugins, as some interfaces have changed. Plugin authors, please refer to PR 1230 to see changed settings access.
+- :feature:`-` Tags are now shown in the reviewer dashboard and can be filtered for.
+- :feature:`-` Pretalx now remembers the timezone you've selected on the schedule page across reloads.
+- :feature:`-` The schedule editor now polls changes, so if somebody else changes the schedule while you're editing it, you will see the changes soon afterwards.
+- :feature:`-` Pretalx will now highlight overlapping sessions on the schedule editor, and will also warn you before you release a new schedule if sessions overlap in the same room.
+- :bug:`-` When you clicked a talk in the schedule editor, it would open in a new window, but also stay in dragging mode in the editor page.
+- :bug:`-` Fixed an issue when rendering individual session times in emails.
+- :support:`-` As Python 3.6 is EOL soon, we've dropped support, and now support Python 3.7+.
+- :feature:`-` Schedules have better scroll behaviour on very wide and very narrow displays.
+- :feature:`-` Media files are now excluded from crawlers via robots.txt.
+- :bug:`-` Fixed a bug where abstaining during the review process wasn't possible while review scores were mandatory.
+- :feature:`-` If you run a multi-lingual event, you don't have to request the content locale in your CfP anymore.
+- :feature:`-` pretalx now comes with new translations, in Arabic, Spanish, and Brazilian Portuguese!
+- :feature:`-` Email signatures now look a lot better in HTML emails
+- :feature:`1171` Organisers can now disable audience feedback.
+- :feature:`1163` You can now link to specific days on the schedule again, as with our old schedule. The link is generated when you click the tabs leading to specific days.
+- :feature:`-` Plugin languages can now be either globally available or only for active events – plugin developers, please adjust your plugins!
+- :feature:`-` Organisers can now disable the optional inclusion of gravatar images.
+- :feature:`-` If you attach ``?lang=en`` to a request, pretalx will serve the page in the requested language (if active in the current event).
+- :bug:`1157` When adding a new organisers to a team, email suggestions from known users didn't work.
+- :bug:`1157` When adding a new speaker to a proposal, pretalx would suggest organiser accounts rather than speaker accounts.
+- :feature:`412` pretalx finally supports sending of emails based on templates, with a full template placeholder system. Hello, {name}!
+- :feature:`715` Email filters are now subtractive instead of additive, giving you more fine-grained control about your bulk emails.
+- :bug:`1150` pretalx now doesn't allow you to test your custom SMTP settings until you have actually configured them.
+- :feature:`976` Improved the tagging interface to be still useful with a large number of tags.
+- :feature:`933` You can now change a session's room and time in the session form, allowing for minute-level accuracy instead of our usual 5-minute intervals.
+- :feature:`-` Plugins can now perform actions on every schedule release (for example, to trigger an update in external consumers to avoid polling).
+- :feature:`-` On session detail pages, the event timezone is now noted next to the time.
+- :feature:`-` As a reminder, the event timezone will be shown at the top of the schedule editor page.
+- :feature:`-` Anonymisation for reviewers can now be switched on on a team level, overriding the general event settings.
+- :feature:`-` Plugin selection is now available for all organisers, not just administrators.
+- :bug:`-` Session detail pages didn't use the full width of the page.
+- :feature:`-` There is a new plugin hook that allows you to perform actions when a new schedule is released.
 - :release:`2.2.0 <2021-08-15>`
 - :feature:`-` To improve performance, the NoJS schedule is now located on a separate page.
 - :feature:`1143` On self-hosted pretalx instances, you can now configure pretalx to include additional CSP headers, especially of interest for plugin developers.

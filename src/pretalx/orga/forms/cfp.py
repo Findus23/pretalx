@@ -3,10 +3,9 @@ from django.db.models import Count, Q
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from django_scopes.forms import SafeModelChoiceField, SafeModelMultipleChoiceField
-from hierarkey.forms import HierarkeyForm
 from i18nfield.forms import I18nFormMixin, I18nModelForm
 
-from pretalx.common.mixins.forms import ReadOnlyFlag
+from pretalx.common.mixins.forms import I18nHelpText, JsonSubfieldMixin, ReadOnlyFlag
 from pretalx.submission.models import (
     AnswerOption,
     CfP,
@@ -19,46 +18,25 @@ from pretalx.submission.models import (
 from pretalx.submission.models.question import QuestionRequired
 
 
-class CfPSettingsForm(ReadOnlyFlag, I18nFormMixin, HierarkeyForm):
+class CfPSettingsForm(
+    ReadOnlyFlag, I18nFormMixin, I18nHelpText, JsonSubfieldMixin, forms.Form
+):
     use_tracks = forms.BooleanField(
         label=_("Use tracks"),
         required=False,
         help_text=_("Do you organise your sessions by tracks?"),
     )
+    use_gravatar = forms.BooleanField(
+        label=_("Use Gravatar"),
+        required=False,
+        help_text=_(
+            "Allow speakers to automatically include their gravatar profile image."
+        ),
+    )
     present_multiple_times = forms.BooleanField(
         label=_("Slot Count"),
         required=False,
         help_text=_("Can sessions be held multiple times?"),
-    )
-    cfp_show_deadline = forms.BooleanField(
-        label=_("Display deadline publicly"),
-        required=False,
-        help_text=_("Show the time and date the CfP ends to potential speakers."),
-    )
-    cfp_title_min_length = forms.IntegerField(label="", required=False, min_value=0)
-    cfp_abstract_min_length = forms.IntegerField(
-        label=_("Minimum length"), required=False, min_value=0
-    )
-    cfp_description_min_length = forms.IntegerField(
-        label=_("Minimum length"), required=False, min_value=0
-    )
-    cfp_biography_min_length = forms.IntegerField(
-        label=_("Minimum length"), required=False, min_value=0
-    )
-    cfp_title_max_length = forms.IntegerField(label="", required=False, min_value=0)
-    cfp_abstract_max_length = forms.IntegerField(
-        label=_("Maximum length"), required=False, min_value=0
-    )
-    cfp_description_max_length = forms.IntegerField(
-        label=_("Maximum length"), required=False, min_value=0
-    )
-    cfp_biography_max_length = forms.IntegerField(
-        label=_("Maximum length"), required=False, min_value=0
-    )
-    cfp_count_length_in = forms.ChoiceField(
-        label=_("Count text length in"),
-        choices=(("chars", _("Characters")), ("words", _("Words"))),
-        widget=forms.RadioSelect(),
     )
     mail_on_new_submission = forms.BooleanField(
         label=_("Send mail on new proposal"),
@@ -68,18 +46,17 @@ class CfPSettingsForm(ReadOnlyFlag, I18nFormMixin, HierarkeyForm):
         required=False,
     )
 
-    def __init__(self, obj, *args, **kwargs):
+    def __init__(self, *args, obj, **kwargs):
         kwargs.pop(
             "read_only"
         )  # added in ActionFromUrl view mixin, but not needed here.
-        super().__init__(*args, obj=obj, **kwargs)
+        self.instance = obj
+        super().__init__(*args, **kwargs)
         if getattr(obj, "email"):
             self.fields[
                 "mail_on_new_submission"
             ].help_text += f' (<a href="mailto:{obj.email}">{obj.email}</a>)'
-        for field in ["abstract", "description", "biography"]:
-            self.fields[f"cfp_{field}_min_length"].widget.attrs["placeholder"] = ""
-            self.fields[f"cfp_{field}_max_length"].widget.attrs["placeholder"] = ""
+        self.length_fields = ["title", "abstract", "description", "biography"]
         self.request_require_fields = [
             "abstract",
             "description",
@@ -91,52 +68,93 @@ class CfPSettingsForm(ReadOnlyFlag, I18nFormMixin, HierarkeyForm):
             "image",
             "track",
             "duration",
+            "content_locale",
         ]
+        for attribute in self.length_fields:
+            field_name = f"cfp_{attribute}_min_length"
+            self.fields[field_name] = forms.IntegerField(
+                required=False,
+                min_value=0,
+                initial=obj.cfp.fields[attribute].get("min_length"),
+            )
+            self.fields[field_name].widget.attrs["placeholder"] = ""
+            field_name = f"cfp_{attribute}_max_length"
+            self.fields[field_name] = forms.IntegerField(
+                required=False,
+                min_value=0,
+                initial=obj.cfp.fields[attribute].get("max_length"),
+            )
+            self.fields[field_name].widget.attrs["placeholder"] = ""
         for attribute in self.request_require_fields:
             field_name = f"cfp_ask_{attribute}"
             self.fields[field_name] = forms.ChoiceField(
                 required=True,
-                initial="required"
-                if obj.settings.get(f"cfp_require_{attribute}")
-                else (
-                    "optional"
-                    if obj.settings.get(f"cfp_request_{attribute}")
-                    else "do_not_ask"
-                ),
+                initial=obj.cfp.fields[attribute]["visibility"],
                 choices=[
                     ("do_not_ask", _("Do not ask")),
                     ("optional", _("Ask, but do not require input")),
                     ("required", _("Ask and require input")),
                 ],
             )
+        if not obj.is_multilingual:
+            self.fields.pop("cfp_ask_content_locale", None)
 
     def save(self, *args, **kwargs):
-        for attribute in self.request_require_fields:
-            key = f"cfp_ask_{attribute}"
-            data = self.cleaned_data.pop(key)
-            self.fields.pop(
-                key
-            )  # Hierarkey falls over when fields are not in cleaned_data
-            self._s.set(f"cfp_request_{attribute}", data != "do_not_ask")
-            self._s.set(f"cfp_require_{attribute}", data == "required")
+        for key in self.request_require_fields:
+            self.instance.cfp.fields[key]["visibility"] = self.cleaned_data.get(
+                f"cfp_ask_{key}"
+            )
+        for key in self.length_fields:
+            self.instance.cfp.fields[key]["min_length"] = self.cleaned_data.get(
+                f"cfp_{key}_min_length"
+            )
+            self.instance.cfp.fields[key]["max_length"] = self.cleaned_data.get(
+                f"cfp_{key}_max_length"
+            )
+        self.instance.cfp.save()
         super().save(*args, **kwargs)
 
+    class Meta:
+        # These are JSON fields on event.settings
+        json_fields = {
+            "use_tracks": "feature_flags",
+            "use_gravatar": "feature_flags",
+            "present_multiple_times": "feature_flags",
+            "mail_on_new_submission": "mail_settings",
+        }
 
-class CfPForm(ReadOnlyFlag, I18nModelForm):
+
+class CfPForm(ReadOnlyFlag, I18nHelpText, JsonSubfieldMixin, I18nModelForm):
+    show_deadline = forms.BooleanField(
+        label=_("Display deadline publicly"),
+        required=False,
+        help_text=_("Show the time and date the CfP ends to potential speakers."),
+    )
+    count_length_in = forms.ChoiceField(
+        label=_("Count text length in"),
+        choices=(("chars", _("Characters")), ("words", _("Words"))),
+        widget=forms.RadioSelect(),
+    )
+
     class Meta:
         model = CfP
         fields = ["headline", "text", "deadline"]
         widgets = {
             "deadline": forms.DateTimeInput(attrs={"class": "datetimepickerfield"})
         }
+        # These are JSON fields on cfp.settings
+        json_fields = {
+            "show_deadline": "settings",
+            "count_length_in": "settings",
+        }
 
 
-class QuestionForm(ReadOnlyFlag, I18nModelForm):
+class QuestionForm(ReadOnlyFlag, I18nHelpText, I18nModelForm):
     def __init__(self, *args, event=None, **kwargs):
         super().__init__(*args, **kwargs)
         instance = kwargs.get("instance")
         if not (
-            event.settings.use_tracks
+            event.feature_flags["use_tracks"]
             and event.tracks.all().count()
             and event.settings.cfp_request_track
         ):
@@ -192,6 +210,8 @@ class QuestionForm(ReadOnlyFlag, I18nModelForm):
             "deadline": forms.DateTimeInput(attrs={"class": "datetimepickerfield"}),
             "question_required": forms.RadioSelect(),
             "freeze_after": forms.DateTimeInput(attrs={"class": "datetimepickerfield"}),
+            "tracks": forms.SelectMultiple(attrs={"class": "select2"}),
+            "submission_types": forms.SelectMultiple(attrs={"class": "select2"}),
         }
         field_classes = {
             "variant": SafeModelChoiceField,
@@ -200,13 +220,13 @@ class QuestionForm(ReadOnlyFlag, I18nModelForm):
         }
 
 
-class AnswerOptionForm(ReadOnlyFlag, I18nModelForm):
+class AnswerOptionForm(ReadOnlyFlag, I18nHelpText, I18nModelForm):
     class Meta:
         model = AnswerOption
         fields = ["answer"]
 
 
-class SubmissionTypeForm(ReadOnlyFlag, I18nModelForm):
+class SubmissionTypeForm(ReadOnlyFlag, I18nHelpText, I18nModelForm):
     def __init__(self, *args, event=None, **kwargs):
         self.event = event
         super().__init__(*args, **kwargs)
@@ -235,7 +255,7 @@ class SubmissionTypeForm(ReadOnlyFlag, I18nModelForm):
         }
 
 
-class TrackForm(ReadOnlyFlag, I18nModelForm):
+class TrackForm(ReadOnlyFlag, I18nHelpText, I18nModelForm):
     def __init__(self, *args, event=None, **kwargs):
         self.event = event
         super().__init__(*args, **kwargs)
@@ -267,7 +287,7 @@ class SubmitterAccessCodeForm(forms.ModelForm):
         self.fields["submission_type"].queryset = SubmissionType.objects.filter(
             event=self.event
         )
-        if event.settings.use_tracks:
+        if event.feature_flags["use_tracks"]:
             self.fields["track"].queryset = Track.objects.filter(event=self.event)
         else:
             self.fields.pop("track")
@@ -286,7 +306,9 @@ class SubmitterAccessCodeForm(forms.ModelForm):
             "submission_type": SafeModelChoiceField,
         }
         widgets = {
-            "valid_until": forms.DateTimeInput(attrs={"class": "datetimepickerfield"})
+            "valid_until": forms.DateTimeInput(attrs={"class": "datetimepickerfield"}),
+            "track": forms.Select(attrs={"class": "select2"}),
+            "submission_type": forms.Select(attrs={"class": "select2"}),
         }
 
 
@@ -385,7 +407,7 @@ class QuestionFilterForm(forms.Form):
         self.fields["submission_type"].queryset = SubmissionType.objects.filter(
             event=event
         )
-        if not event.settings.use_tracks:
+        if not event.feature_flags["use_tracks"]:
             self.fields.pop("track", None)
         elif "track" in self.fields:
             self.fields["track"].queryset = event.tracks.all()

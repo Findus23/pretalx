@@ -8,11 +8,12 @@ def test_featured_invisible_because_setting(
     client, django_assert_max_num_queries, event, featured, confirmed_submission
 ):
     with scope(event=event):
-        event.settings.show_featured = featured
+        event.feature_flags["show_featured"] = featured
+        event.save()
         confirmed_submission.is_featured = True
         confirmed_submission.save()
     url = str(event.urls.featured)
-    with django_assert_max_num_queries(18):
+    with django_assert_max_num_queries(9):
         response = client.get(url, follow=True)
     if featured == "never":
         assert response.status_code == 404
@@ -30,9 +31,10 @@ def test_featured_invisible_because_schedule(
     client, django_assert_max_num_queries, event, featured
 ):
     with scope(event=event):
-        event.settings.show_featured = featured
+        event.feature_flags["show_featured"] = featured
+        event.save()
         event.release_schedule("42")
-    with django_assert_max_num_queries(27):
+    with django_assert_max_num_queries(8):
         response = client.get(event.urls.featured)
 
     if featured != "always":
@@ -49,11 +51,12 @@ def test_featured_invisible_because_schedule(
 def test_featured_visible_despite_schedule(
     client, django_assert_max_num_queries, event, featured
 ):
-    event.settings.show_featured = featured
-    event.settings.show_schedule = False
+    event.feature_flags["show_featured"] = featured
+    event.feature_flags["show_schedule"] = False
+    event.save()
     with scope(event=event):
         event.release_schedule("42")
-    with django_assert_max_num_queries(17):
+    with django_assert_max_num_queries(8):
         response = client.get(event.urls.featured, follow=True)
     assert response.status_code == 200
     assert "featured" in response.content.decode()
@@ -70,9 +73,10 @@ def test_featured_talk_list(
     confirmed_submission.is_featured = True
     confirmed_submission.save()
 
-    event.settings.show_featured = True
+    event.feature_flags["show_featured"] = True
+    event.save()
 
-    with django_assert_max_num_queries(18):
+    with django_assert_max_num_queries(9):
         response = client.get(event.urls.featured, follow=True)
     assert response.status_code == 200
     content = response.content.decode()

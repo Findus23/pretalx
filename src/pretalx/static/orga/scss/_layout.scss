@@ -8,6 +8,7 @@
   display: flex;
   flex-direction: row;
   flex-grow: 1;
+  max-width: 100%;
 }
 
 #page-content {
@@ -16,6 +17,13 @@
   padding: 20px 40px;
   margin-left: 250px;
   margin-top: 50px;
+  max-width: 100%;
+  overflow-x: hidden;
+  overflow-y: hidden;
+
+  .flex-content {
+    max-width: 100%;
+  }
 }
 
 aside.sidebar {
@@ -298,6 +306,7 @@ footer {
   display: flex;
   flex-wrap: wrap;
   align-content: center;
+  width: 100%;
 
   & > .form-group {
     width: 300px;
@@ -442,10 +451,6 @@ footer {
     width: 100%;
   }
 
-  .flex-content {
-    max-width: 100%;
-  }
-
   .navbar {
     padding: 0.1rem 1rem;
 
@@ -528,8 +533,8 @@ td.reviewer {
   flex-direction: row;
 }
 
-form #id_settings-display_header_pattern,
-form #id_display-display_header_pattern {
+form #id_header_pattern,
+form #id_display-header_pattern {
   display: flex;
   padding: 0;
   overflow-x: auto;
@@ -595,14 +600,35 @@ h2 .submission-state-dropdown {
 
 .submission-state-dropdown {
   display: inline-block;
+  border-radius: 6px;
+  background-image: repeating-linear-gradient(315deg, var(--submission-color-primary), var(--submission-color-primary) 8px, var(--submission-color-secondary) 8px, var(--submission-color-secondary) 16px);
+  padding: 3px;
 
   summary {
+    background-color: white;
+    border-radius: 3px;
+    padding: 0.25rem 0.5rem;
+    line-height: 1.5;
     display: flex;
-    align-items: baseline;
-
-    & > * {
-      padding: 0 4px;
+    align-items: center;
+    h4 {
+      font-size: 0.875rem;
+      font-weight: 400;
+      margin-bottom: 0;
+      display: inline-block;
+      padding: 4px 0 3px 0;
     }
+
+    i.fa:first-child {
+      padding: 0 3px;
+    }
+    i.fa.fa-caret-down {
+      margin-left: 10px;
+    }
+  }
+  &:hover summary {
+    background-color:inherit;
+    color: inherit;
   }
 
   a {
@@ -615,57 +641,74 @@ h2 .submission-state-dropdown {
 .submission-state-withdrawn,
 .submission-state-canceled {
   color: $gray;
-  border-color: $gray;
+  --submission-color-primary: #{$gray};
+  --submission-color-secondary: #{$gray};
+}
+.submission-state-dropdown.submission-state-pending-deleted,
+.submission-state-dropdown.submission-state-pending-withdrawn,
+.submission-state-dropdown.submission-state-pending-canceled {
+  --submission-color-secondary: #{$gray};
 }
 .submission-state-deleted:hover,
 .submission-state-withdrawn:hover,
 .submission-state-canceled:hover {
   color: $white;
   background-color: $gray;
-  border-color: $gray;
 }
 
 .submission-state-submitted {
   color: $brand-info;
-  border-color: $brand-info;
   background-color: $white;
+  --submission-color-primary: #{$brand-info};
+  --submission-color-secondary: #{$brand-info};
+}
+.submission-state-dropdown.submission-state-pending-submitted {
+  --submission-color-secondary: #{$brand-info};
 }
 .submission-state-submitted:hover {
   color: $white;
   background-color: $brand-info;
-  border-color: $brand-info;
 }
 
 .submission-state-accepted {
   color: lighten($brand-success, 10%);
-  border-color: lighten($brand-success, 10%);
   background-color: $white;
+  --submission-color-primary: #{lighten($brand-success, 10%)};
+  --submission-color-secondary: #{lighten($brand-success, 10%)};
+}
+.submission-state-dropdown.submission-state-pending-accepted {
+  --submission-color-secondary: #{lighten($brand-success, 10%)};
 }
 .submission-state-accepted:hover {
   background-color: lighten($brand-success, 10%);
-  border-color: lighten($brand-success, 10%);
   color: $white;
 }
 
 .submission-state-confirmed {
   color: lighten($brand-primary, 10%);
-  border-color: lighten($brand-primary, 10%);
   background-color: $white;
+  --submission-color-primary: #{lighten($brand-primary, 10%)};
+  --submission-color-secondary: #{lighten($brand-primary, 10%)};
+}
+.submission-state-dropdown.submission-state-pending-confirmed {
+  --submission-color-secondary: #{lighten($brand-primary, 10%)};
 }
 .submission-state-confirmed:hover {
   color: $white;
-  border-color: lighten($brand-primary, 10%);
   background-color: lighten($brand-primary, 10%);
 }
 
 .submission-state-rejected {
   color: $danger;
-  border-color: $danger;
   background-color: $white;
+  --submission-color-primary: #{$danger};
+  --submission-color-secondary: #{$danger};
+}
+.submission-state-dropdown.submission-state-pending-rejected {
+  --submission-color-secondary: #{$danger};
 }
 .submission-state-rejected:hover {
   color: $white;
-  border-color: $danger;
   background-color: $danger;
 }
 
@@ -905,7 +948,7 @@ h2 .submission-state-dropdown {
 .review-table.table {
   thead th {
     position: sticky;
-    top: 50px;
+    top: 0;  // can't be sticky due to scroll containers, but we keep the sticky to make the &:after work
     background-color: white;
     border-bottom: none;
     z-index: 50;
@@ -968,7 +1011,7 @@ h2 .submission-state-dropdown {
     }
   }
 }
-.review-table + #submitBar {
+#submitBar {
   display: flex;
   justify-content: flex-end;
   align-items: baseline;
@@ -1007,6 +1050,7 @@ main .progress {
     position: absolute;
     text-align: center;
     width: 100%;
+    top: 50%;
   }
 }
 #anonymise {
@@ -1054,5 +1098,62 @@ main .progress {
 .hide-label {
   label {
     display: none;
+  }
+}
+.mail-preview-group {
+  margin-bottom: -15px;
+}
+div.mail-preview {
+  border: 1px solid #ccc;
+  border-top-width: 1px;
+  border-radius: 3px;
+  padding: 4px 36px;
+
+  .placeholder {
+    background: transparentize($brand-primary, 0.7);
+  }
+}
+
+.mail-preview-group div[lang] {
+  @include border-top-radius(0px);
+  @include border-bottom-radius(0px);
+  border-top-width: 0;
+  margin-bottom: 0;
+  padding-right: 15px;
+  padding-bottom: 15px;
+
+  &:first-child {
+    @include border-top-radius($input-border-radius);
+    border-top-width: 1px;
+  }
+  &:last-child {
+    @include border-bottom-radius($input-border-radius);
+    margin-bottom: 20px;
+  }
+  h2, h3 {
+    margin-bottom: 20px;
+    margin-top: 10px;
+  }
+  p {
+    margin: 0 0 10px;
+
+    /* These are technically the same, but use both */
+    overflow-wrap: break-word;
+    word-wrap: break-word;
+
+    -ms-word-break: break-all;
+    /* This is the dangerous one in WebKit, as it breaks things wherever */
+    word-break: break-all;
+    /* Instead use this non-standard one: */
+    word-break: break-word;
+
+    /* Adds a hyphen where the word breaks, if supported (No Blink) */
+    -ms-hyphens: auto;
+    -moz-hyphens: auto;
+    -webkit-hyphens: auto;
+    hyphens: auto;
+  }
+  p:last-child {
+    margin-bottom: 0;
   }
 }

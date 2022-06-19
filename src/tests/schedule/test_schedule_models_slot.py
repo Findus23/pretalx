@@ -58,8 +58,11 @@ def test_slot_warnings_without_room(slot):
 
 
 @pytest.mark.django_db
-def test_slot_warnings_when_room_unavailable(slot):
+def test_slot_warnings_when_room_unavailable(slot, room_availability):
     with scope(event=slot.event):
+        slot.start = room_availability.end
+        slot.end = slot.start + dt.timedelta(minutes=30)
+        slot.save()
         warnings = slot.schedule.get_talk_warnings(slot)
         assert len(warnings) == 1
         assert warnings[0]["type"] == "room"
@@ -103,9 +106,14 @@ def test_slot_warning_when_speaker_overbooked(
         other_slot.save()
         other_slot.submission.save()
         warnings = slot.schedule.get_talk_warnings(slot)
-        assert len(warnings) == 1
-        assert warnings[0]["type"] == "speaker"
+        assert len(warnings) == 2
+        assert warnings[0]["type"] == "room_overlap"
         assert (
             warnings[0]["message"]
+            == "There's an overlapping session scheduled in this room."
+        )
+        assert warnings[1]["type"] == "speaker"
+        assert (
+            warnings[1]["message"]
             == "A speaker is holding another session at the scheduled time."
         )

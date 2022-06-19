@@ -72,7 +72,9 @@ class TalkView(PermissionRequired, TemplateView):
 
     def get(self, request, *args, **kwargs):
         response = super().get(request, *args, **kwargs)
-        csp_update = {"img-src": "https://www.gravatar.com"}
+        csp_update = {}
+        if request.event.feature_flags["use_gravatar"]:
+            csp_update["img-src"] = "https://www.gravatar.com"
         if self.recording.get("csp_header"):
             csp_update["frame-src"] = self.recording.get("csp_header")
         response._csp_update = csp_update
@@ -206,6 +208,11 @@ class FeedbackView(PermissionRequired, FormView):
     @cached_property
     def speakers(self):
         return self.talk.speakers.all()
+
+    def dispatch(self, request, *args, **kwargs):
+        if not request.event.feature_flags["use_feedback"]:
+            raise Http404()
+        return super().dispatch(request, *args, **kwargs)
 
     def get(self, *args, **kwargs):
         talk = self.talk

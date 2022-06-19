@@ -9,6 +9,15 @@ document.addEventListener("DOMContentLoaded", function() {
     question_page_toggle_target_view()
   }
 
+  function hideOptions (state) {
+    if (!state.id || !state.element) return state.text
+    if (state.element && state.element.classList.contains("hidden")) return
+    return state.text
+  }
+  document.querySelectorAll(".select2").forEach(select => {
+    $(select).select2({placeholder: select.title, templateResult: hideOptions})
+  })
+
   $("input.submission_featured").change(function() {
     var id = this.dataset.id
 
@@ -60,19 +69,6 @@ document.addEventListener("DOMContentLoaded", function() {
       })
   })
 
-  $(".checkbox-multi-select input[type=checkbox]").change(ev => {
-    const checkbox = ev.target
-    var multiSelect = checkbox.parentNode
-    while (
-      multiSelect &&
-      !multiSelect.classList.contains("checkbox-multi-select")
-    ) {
-      multiSelect = multiSelect.parentNode
-    }
-    if (multiSelect) {
-      update_multi_select_caption(multiSelect)
-    }
-  })
 
   $(".keep-scroll-position").click(ev => {
     sessionStorage.setItem('scroll-position', window.scrollY);
@@ -80,9 +76,6 @@ document.addEventListener("DOMContentLoaded", function() {
 
   restore_scroll_position();
 
-  document.querySelectorAll(".checkbox-multi-select").forEach(element => {
-    update_multi_select_caption(element)
-  })
 })
 
 function restore_scroll_position() {

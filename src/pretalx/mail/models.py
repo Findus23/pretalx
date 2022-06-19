@@ -2,6 +2,7 @@ from copy import deepcopy
 
 import bleach
 import markdown
+from django.conf import settings
 from django.db import models, transaction
 from django.template.loader import get_template
 from django.utils.timezone import now
@@ -14,6 +15,7 @@ from pretalx.common.exceptions import SendMailException
 from pretalx.common.mixins.models import LogMixin
 from pretalx.common.templatetags.rich_text import ALLOWED_TAGS
 from pretalx.common.urls import EventUrls
+from pretalx.mail.context import get_mail_context
 
 
 class MailTemplate(LogMixin, models.Model):
@@ -55,6 +57,9 @@ class MailTemplate(LogMixin, models.Model):
             "Enter comma separated addresses. Will receive a blind copy of every mail sent from this template. This may be a LOT!"
         ),
     )
+    # Auto-created templates are created when mass emails are sent out. They are only used to re-create similar
+    # emails, and are never shown in a list of email templates or anywhere else.
+    is_auto_created = models.BooleanField(default=False)
 
     objects = ScopedManager(event="event")
 
@@ -72,10 +77,11 @@ class MailTemplate(LogMixin, models.Model):
         event,
         locale: str = None,
         context: dict = None,
+        context_kwargs: dict = None,
         skip_queue: bool = False,
         commit: bool = True,
-        submission=None,
         full_submission_content: bool = False,
+        allow_empty_address: bool = False,
     ):
         """Creates a :class:`~pretalx.mail.models.QueuedMail` object from a
         MailTemplate.
@@ -86,11 +92,11 @@ class MailTemplate(LogMixin, models.Model):
         :param locale: The locale will be set via the event and the recipient,
             but can be overridden with this parameter.
         :param context: Context to be used when rendering the template.
+        :param context_kwargs: Passed to get_email_context to retrieve the correct
+            context when rendering the template.
         :param skip_queue: Send directly without saving. Use with caution, as
             it removes any logging and traces.
         :param commit: Set ``False`` to return an unsaved object.
-        :param submission: Pass a submission if one is related to the mail.
-            Will be used to generate context.
         :param full_submission_content: Attach the complete submission with
             all its fields to the email.
         """
@@ -102,6 +108,9 @@ class MailTemplate(LogMixin, models.Model):
         elif isinstance(user, User):
             address = None
             users = [user]
+        elif not user and allow_empty_address:
+            address = None
+            users = None
         else:
             raise TypeError(
                 "First argument to to_mail must be a string or a User, not "
@@ -112,15 +121,19 @@ class MailTemplate(LogMixin, models.Model):
             users = None
 
         with override(locale):
-            context = context or dict()
+            context_kwargs = context_kwargs or dict()
+            context_kwargs["event"] = self.event
+            default_context = get_mail_context(**context_kwargs)
+            default_context.update(context or {})
+            context = default_context
             try:
                 subject = str(self.subject).format(**context)
                 text = str(self.text).format(**context)
-                if submission and full_submission_content:
+                if full_submission_content and "submission" in context_kwargs:
                     text += "\n\n\n***********\n\n" + str(
                         _("Full proposal content:\n\n")
                     )
-                    text += submission.get_content_for_mail()
+                    text += context_kwargs["submission"].get_content_for_mail()
             except KeyError as e:
                 raise SendMailException(
                     f"Experienced KeyError when rendering email text: {str(e)}"
@@ -131,11 +144,13 @@ class MailTemplate(LogMixin, models.Model):
 
             mail = QueuedMail(
                 event=self.event,
+                template=self,
                 to=address,
                 reply_to=self.reply_to,
                 bcc=self.bcc,
                 subject=subject,
                 text=text,
+                locale=locale,
             )
             if skip_queue:
                 mail.send()
@@ -165,6 +180,13 @@ class QueuedMail(LogMixin, models.Model):
         to="event.Event",
         on_delete=models.PROTECT,
         related_name="queued_mails",
+        null=True,
+        blank=True,
+    )
+    template = models.ForeignKey(
+        to=MailTemplate,
+        related_name="mails",
+        on_delete=models.SET_NULL,
         null=True,
         blank=True,
     )
@@ -203,6 +225,7 @@ class QueuedMail(LogMixin, models.Model):
     subject = models.CharField(max_length=200, verbose_name=_("Subject"))
     text = models.TextField(verbose_name=_("Text"))
     sent = models.DateTimeField(null=True, blank=True, verbose_name=_("Sent at"))
+    locale = models.CharField(max_length=32, null=True, blank=True)
 
     objects = ScopedManager(event="event")
 
@@ -217,36 +240,45 @@ class QueuedMail(LogMixin, models.Model):
         sent = self.sent.isoformat() if self.sent else None
         return f"OutboxMail(to={self.to}, subject={self.subject}, sent={sent})"
 
-    @classmethod
-    def make_html(cls, text, event=None):
+    def make_html(self):
+        event = getattr(self, "event", None)
+        sig = None
+        if event:
+            sig = event.mail_settings["signature"]
+            if sig.strip().startswith("-- "):
+                sig = sig.strip()[3:].strip()
         body_md = bleach.linkify(
-            bleach.clean(markdown.markdown(text), tags=ALLOWED_TAGS),
+            bleach.clean(markdown.markdown(self.text), tags=ALLOWED_TAGS),
             parse_email=True,
         )
         html_context = {
             "body": body_md,
             "event": event,
             "color": (event.primary_color if event else "") or "#3aa57c",
+            "locale": self.locale,
+            "rtl": self.locale in settings.LANGUAGES_RTL,
+            "subject": self.subject,
+            "signature": sig,
         }
         return get_template("mail/mailwrapper.html").render(html_context)
 
-    @classmethod
-    def make_text(cls, text, event=None):
-        if not event or not event.settings.mail_signature:
-            return text
-        sig = event.settings.mail_signature
+    def make_text(self):
+        event = getattr(self, "event", None)
+        if not event or not event.mail_settings["signature"]:
+            return self.text
+        sig = event.mail_settings["signature"]
         if not sig.strip().startswith("-- "):
             sig = f"-- \n{sig}"
-        return f"{text}\n{sig}"
+        return f"{self.text}\n{sig}"
 
-    @classmethod
-    def make_subject(cls, text, event=None):
-        if not event or not event.settings.mail_subject_prefix:
-            return text
-        prefix = event.settings.mail_subject_prefix
+    def make_subject(self):
+        event = getattr(self, "event", None)
+        if not event or not event.mail_settings["subject_prefix"]:
+            return self.subject
+        prefix = event.mail_settings["subject_prefix"]
         if not (prefix.startswith("[") and prefix.endswith("]")):
             prefix = f"[{prefix}]"
-        return f"{prefix} {text}"
+        return f"{prefix} {self.subject}"
 
     @transaction.atomic
     def send(self, requestor=None, orga: bool = True):
@@ -262,8 +294,8 @@ class QueuedMail(LogMixin, models.Model):
             )
 
         has_event = getattr(self, "event", None)
-        text = self.make_text(self.text, event=has_event)
-        body_html = self.make_html(text)
+        text = self.make_text()
+        body_html = self.make_html()
 
         from pretalx.common.mail import mail_send_task
 
@@ -273,7 +305,7 @@ class QueuedMail(LogMixin, models.Model):
         mail_send_task.apply_async(
             kwargs={
                 "to": to,
-                "subject": self.make_subject(self.subject, event=has_event),
+                "subject": self.make_subject(),
                 "body": text,
                 "html": body_html,
                 "reply_to": (self.reply_to or "").split(","),

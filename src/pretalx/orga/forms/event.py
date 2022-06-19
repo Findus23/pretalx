@@ -9,13 +9,17 @@ from django.db.models import F, Q
 from django.utils.timezone import now
 from django.utils.translation import gettext_lazy as _
 from django_scopes.forms import SafeModelMultipleChoiceField
-from hierarkey.forms import HierarkeyForm
 from i18nfield.fields import I18nFormField, I18nTextarea
 from i18nfield.forms import I18nFormMixin, I18nModelForm
 
 from pretalx.common.css import validate_css
 from pretalx.common.forms.fields import ImageField
-from pretalx.common.mixins.forms import ReadOnlyFlag
+from pretalx.common.mixins.forms import (
+    HierarkeyMixin,
+    I18nHelpText,
+    JsonSubfieldMixin,
+    ReadOnlyFlag,
+)
 from pretalx.common.phrases import phrases
 from pretalx.event.models.event import Event
 from pretalx.orga.forms.widgets import HeaderSelect, MultipleLanguagesWidget
@@ -24,7 +28,7 @@ from pretalx.submission.models import ReviewPhase, ReviewScore, ReviewScoreCateg
 ENCRYPTED_PASSWORD_PLACEHOLDER = "*******"
 
 
-class EventForm(ReadOnlyFlag, I18nModelForm):
+class EventForm(ReadOnlyFlag, I18nHelpText, JsonSubfieldMixin, I18nModelForm):
     locales = forms.MultipleChoiceField(
         label=_("Active languages"),
         choices=[],
@@ -40,6 +44,80 @@ class EventForm(ReadOnlyFlag, I18nModelForm):
         widget=forms.Textarea(),
         label="",
         help_text=_("You can type in your CSS instead of uploading it, too."),
+    )
+    imprint_url = forms.URLField(
+        label=_("Imprint URL"),
+        help_text=_(
+            "This should point e.g. to a part of your website that has your contact details and legal information."
+        ),
+        required=False,
+    )
+    show_schedule = forms.BooleanField(
+        label=_("Show schedule publicly"),
+        help_text=_(
+            "Unset to hide your schedule, e.g. if you want to use the HTML export exclusively."
+        ),
+        required=False,
+    )
+    schedule = forms.ChoiceField(
+        label=_("Schedule display format"),  # TODO show small preview / icons
+        choices=(
+            ("grid", _("Grid")),
+            ("list", _("List")),
+        ),
+        required=True,
+    )
+    show_featured = forms.ChoiceField(
+        label=_("Show featured sessions"),
+        choices=(
+            ("never", _("Never")),
+            ("pre_schedule", _("Until the first schedule is released")),
+            ("always", _("Always")),
+        ),
+        help_text=_("Should the sessions marked as featured be shown publicly?"),
+        required=True,
+    )
+    use_feedback = forms.BooleanField(
+        label=_("Enable anonymous feedback"),
+        help_text=_(
+            "Attendees will be able to send in feedback after a session is over."
+        ),
+        required=False,
+    )
+    export_html_on_release = forms.BooleanField(
+        label=_("Generate HTML export on schedule release"),
+        help_text=_(
+            "The static HTML export will be provided as a .zip archive on the schedule export page."
+        ),
+        required=False,
+    )
+    html_export_url = forms.URLField(
+        label=_("HTML Export URL"),
+        help_text=_(
+            "If you publish your schedule via the HTML export, you will want the correct absolute URL to be set in various places. "
+            "Please only set this value once you have published your schedule. Should end with a slash."
+        ),
+        required=False,
+    )
+    header_pattern = forms.ChoiceField(
+        label=_("Frontpage header pattern"),
+        help_text=_(
+            "Choose how the frontpage header banner will be styled if you don't upload an image. Pattern source: "
+            '<a href="http://www.heropatterns.com/">heropatterns.com</a>, CC BY 4.0.'
+        ),
+        choices=(
+            ("", _("Plain")),
+            ("pcb", _("Circuits")),
+            ("bubbles", _("Circles")),
+            ("signal", _("Signal")),
+            ("topo", _("Topography")),
+            ("graph", _("Graph Paper")),
+        ),
+        required=False,
+        widget=HeaderSelect,
+    )
+    meta_noindex = forms.BooleanField(
+        label=_("Ask search engines not to index the event pages"), required=False
     )
 
     def __init__(self, *args, **kwargs):
@@ -67,6 +145,29 @@ class EventForm(ReadOnlyFlag, I18nModelForm):
             if settings.LANGUAGES_INFORMATION[choice[0]].get("visible", True)
             or choice[0] in self.instance.plugin_locales
         ]
+
+    def clean_custom_domain(self):
+        data = self.cleaned_data["custom_domain"]
+        if not data:
+            return data
+        data = data.lower()
+        if data in [urlparse(settings.SITE_URL).hostname, settings.SITE_URL]:
+            raise ValidationError(
+                _("Please do not choose the default domain as custom event domain.")
+            )
+        if not data.startswith("https://"):
+            data = data[len("http://") :] if data.startswith("http://") else data
+            data = "https://" + data
+        data = data.rstrip("/")
+        try:
+            socket.gethostbyname(data[len("https://") :])
+        except OSError:
+            raise forms.ValidationError(
+                _(
+                    'The domain "{domain}" does not have a name server entry at this time. Please make sure the domain is working before configuring it here.'
+                ).format(domain=data)
+            )
+        return data
 
     def clean_custom_css(self):
         if self.cleaned_data.get("custom_css") or self.files.get("custom_css"):
@@ -161,6 +262,7 @@ class EventForm(ReadOnlyFlag, I18nModelForm):
             "timezone",
             "email",
             "locale",
+            "custom_domain",
             "primary_color",
             "custom_css",
             "logo",
@@ -177,124 +279,40 @@ class EventForm(ReadOnlyFlag, I18nModelForm):
             "date_to": forms.DateInput(
                 attrs={"class": "datepickerfield", "data-date-after": "#id_date_from"}
             ),
+            "locale": forms.Select(attrs={"class": "select2"}),
+            "timezone": forms.Select(attrs={"class": "select2"}),
+        }
+        json_fields = {
+            "imprint_url": "display_settings",
+            "show_schedule": "feature_flags",
+            "schedule": "display_settings",
+            "show_featured": "feature_flags",
+            "use_feedback": "feature_flags",
+            "export_html_on_release": "feature_flags",
+            "html_export_url": "display_settings",
+            "header_pattern": "display_settings",
+            "meta_noindex": "display_settings",
         }
 
 
-class EventSettingsForm(ReadOnlyFlag, I18nFormMixin, HierarkeyForm):
-
-    custom_domain = forms.URLField(
-        label=_("Custom domain"),
-        help_text=_("Enter a custom domain, such as https://my.event.example.org"),
-        required=False,
-    )
-    imprint_url = forms.URLField(
-        label=_("Imprint URL"),
-        help_text=_(
-            "This should point e.g. to a part of your website that has your contact details and legal information."
-        ),
-        required=False,
-    )
-    show_schedule = forms.BooleanField(
-        label=_("Show schedule publicly"),
-        help_text=_(
-            "Unset to hide your schedule, e.g. if you want to use the HTML export exclusively."
-        ),
-        required=False,
-    )
-    schedule_display = forms.ChoiceField(
-        label=_("Schedule display format"),  # TODO show small preview / icons
-        choices=(
-            ("proportional", _("Grid")),
-            ("list", _("List")),
-        ),
-        required=True,
-    )
-    show_featured = forms.ChoiceField(
-        label=_("Show featured sessions"),
-        choices=(
-            ("never", _("Never")),
-            ("pre_schedule", _("Until the first schedule is released")),
-            ("always", _("Always")),
-        ),
-        help_text=_("Should the sessions marked as featured be shown publicly?"),
-        required=True,
-    )
-    export_html_on_schedule_release = forms.BooleanField(
-        label=_("Generate HTML export on schedule release"),
-        help_text=_(
-            "The static HTML export will be provided as a .zip archive on the schedule export page."
-        ),
-        required=False,
-    )
-    html_export_url = forms.URLField(
-        label=_("HTML Export URL"),
-        help_text=_(
-            "If you publish your schedule via the HTML export, you will want the correct absolute URL to be set in various places. "
-            "Please only set this value once you have published your schedule. Should end with a slash."
-        ),
-        required=False,
-    )
-    display_header_pattern = forms.ChoiceField(
-        label=_("Frontpage header pattern"),
-        help_text=_(
-            "Choose how the frontpage header banner will be styled if you don't upload an image. Pattern source: "
-            '<a href="http://www.heropatterns.com/">heropatterns.com</a>, CC BY 4.0.'
-        ),
-        choices=(
-            ("", _("Plain")),
-            ("pcb", _("Circuits")),
-            ("bubbles", _("Circles")),
-            ("signal", _("Signal")),
-            ("topo", _("Topography")),
-            ("graph", _("Graph Paper")),
-        ),
-        required=False,
-        widget=HeaderSelect,
-    )
-    meta_noindex = forms.BooleanField(
-        label=_("Ask search engines not to index the event pages"), required=False
-    )
-
-    def clean_custom_domain(self):
-        data = self.cleaned_data["custom_domain"]
-        if not data:
-            return data
-        data = data.lower()
-        if data in [urlparse(settings.SITE_URL).hostname, settings.SITE_URL]:
-            raise ValidationError(
-                _("Please do not choose the default domain as custom event domain.")
-            )
-        if not data.startswith("https://"):
-            data = data[len("http://") :] if data.startswith("http://") else data
-            data = "https://" + data
-        data = data.rstrip("/")
-        try:
-            socket.gethostbyname(data[len("https://") :])
-        except OSError:
-            raise forms.ValidationError(
-                _(
-                    'The domain "{domain}" does not have a name server entry at this time. Please make sure the domain is working before configuring it here.'
-                ).format(domain=data)
-            )
-        return data
-
-
-class MailSettingsForm(ReadOnlyFlag, I18nFormMixin, HierarkeyForm):
-    mail_reply_to = forms.EmailField(
+class MailSettingsForm(
+    ReadOnlyFlag, I18nFormMixin, I18nHelpText, JsonSubfieldMixin, forms.Form
+):
+    reply_to = forms.EmailField(
         label=_("Contact address"),
         help_text=_(
             "Reply-To address. If this setting is empty and you have no custom sender, your event email address will be used as Reply-To address."
         ),
         required=False,
     )
-    mail_subject_prefix = forms.CharField(
+    subject_prefix = forms.CharField(
         label=_("Mail subject prefix"),
         help_text=_(
             "The prefix will be prepended to outgoing mail subjects in [brackets]."
         ),
         required=False,
     )
-    mail_signature = forms.CharField(
+    signature = forms.CharField(
         label=_("Mail signature"),
         help_text=_(
             'The signature will be added to outgoing mails, preceded by "-- ".'
@@ -345,7 +363,7 @@ class MailSettingsForm(ReadOnlyFlag, I18nFormMixin, HierarkeyForm):
         self.set_encrypted_password_placeholder()
 
     def set_encrypted_password_placeholder(self):
-        if self.initial["smtp_password"]:
+        if self.initial.get("smtp_password"):
             self.fields["smtp_password"].widget.attrs[
                 "placeholder"
             ] = ENCRYPTED_PASSWORD_PLACEHOLDER
@@ -386,15 +404,37 @@ class MailSettingsForm(ReadOnlyFlag, I18nFormMixin, HierarkeyForm):
                 ),
             )
 
+    class Meta:
+        json_fields = {
+            "reply_to": "mail_settings",
+            "subject_prefix": "mail_settings",
+            "signature": "mail_settings",
+            "smtp_use_custom": "mail_settings",
+            "mail_from": "mail_settings",
+            "smtp_host": "mail_settings",
+            "smtp_port": "mail_settings",
+            "smtp_username": "mail_settings",
+            "smtp_password": "mail_settings",
+            "smtp_use_tls": "mail_settings",
+            "smtp_use_ssl": "mail_settings",
+        }
 
-class ReviewSettingsForm(ReadOnlyFlag, I18nFormMixin, HierarkeyForm):
-    review_score_mandatory = forms.BooleanField(
+
+class ReviewSettingsForm(
+    ReadOnlyFlag,
+    I18nFormMixin,
+    I18nHelpText,
+    HierarkeyMixin,
+    JsonSubfieldMixin,
+    forms.Form,
+):
+    score_mandatory = forms.BooleanField(
         label=_("Require a review score"), required=False
     )
-    review_text_mandatory = forms.BooleanField(
+    text_mandatory = forms.BooleanField(
         label=_("Require a review text"), required=False
     )
-    review_score_aggregate = forms.ChoiceField(
+    aggregate_method = forms.ChoiceField(
         label=_("Score aggregation method"),
         required=True,
         choices=(("median", _("Median")), ("mean", _("Average (mean)"))),
@@ -411,8 +451,16 @@ class ReviewSettingsForm(ReadOnlyFlag, I18nFormMixin, HierarkeyForm):
         required=False,
     )
 
+    class Meta:
+        json_fields = {
+            "score_mandatory": "review_settings",
+            "text_mandatory": "review_settings",
+            "aggregate_method": "review_settings",
+        }
+        hierarkey_fields = ("review_help_text",)
 
-class WidgetSettingsForm(HierarkeyForm):
+
+class WidgetSettingsForm(JsonSubfieldMixin, forms.Form):
     show_widget_if_not_public = forms.BooleanField(
         label=_("Show the widget even if the schedule is not public"),
         help_text=_(
@@ -420,6 +468,9 @@ class WidgetSettingsForm(HierarkeyForm):
         ),
         required=False,
     )
+
+    class Meta:
+        json_fields = {"show_widget_if_not_public": "feature_flags"}
 
 
 class WidgetGenerationForm(forms.ModelForm):
@@ -439,9 +490,10 @@ class WidgetGenerationForm(forms.ModelForm):
     class Meta:
         model = Event
         fields = ["locale"]
+        widgets = {"locale": forms.Select(attrs={"class": "select2"})}
 
 
-class ReviewPhaseForm(I18nModelForm):
+class ReviewPhaseForm(I18nHelpText, I18nModelForm):
     def __init__(self, *args, event=None, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -476,13 +528,13 @@ class ReviewPhaseForm(I18nModelForm):
         }
 
 
-class ReviewScoreCategoryForm(I18nModelForm):
+class ReviewScoreCategoryForm(I18nHelpText, I18nModelForm):
     new_scores = forms.CharField(required=False, initial="")
 
     def __init__(self, *args, event=None, **kwargs):
         self.event = event
         super().__init__(*args, **kwargs)
-        if not event or not event.settings.use_tracks:
+        if not event or not event.feature_flags["use_tracks"]:
             self.fields.pop("limit_tracks")
         else:
             self.fields["limit_tracks"].queryset = event.tracks.all()
@@ -559,4 +611,4 @@ class ReviewScoreCategoryForm(I18nModelForm):
         field_classes = {
             "limit_tracks": SafeModelMultipleChoiceField,
         }
-        widgets = {"limit_tracks": forms.CheckboxSelectMultiple}
+        widgets = {"limit_tracks": forms.SelectMultiple(attrs={"class": "select2"})}

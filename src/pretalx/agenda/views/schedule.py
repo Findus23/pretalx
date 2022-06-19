@@ -13,7 +13,6 @@ from django.http import (
 )
 from django.urls import resolve, reverse
 from django.utils.functional import cached_property
-from django.utils.timezone import now
 from django.utils.translation import activate
 from django.utils.translation import gettext_lazy as _
 from django.views.generic import TemplateView
@@ -217,29 +216,12 @@ class ScheduleView(EventPermissionRequired, ScheduleMixin, TemplateView):
     def show_talk_list(self):
         return (
             self.request.path.endswith("/talk/")
-            or self.request.event.settings.schedule_display == "list"
+            or self.request.event.display_settings["schedule"] == "list"
         )
 
-    def get_context_data(self, **kwargs):
-        result = super().get_context_data(**kwargs)
-        if "schedule" not in result:
-            return result
 
-        result.update(**self.get_schedule_data())
-        result["day_count"] = len(result["data"])
-        today = now().date()
-        result["initial_day"] = (
-            (
-                today
-                if result["data"][0]["start"].date()
-                <= today
-                <= result["data"][-1]["start"].date()
-                else result["data"][0]["start"]
-            )
-            if result["day_count"]
-            else None
-        )
-        return result
+class ScheduleNoJsView(ScheduleView):
+    template_name = "agenda/schedule_nojs.html"
 
     def get_schedule_data(self):
         data = ScheduleData(
@@ -257,9 +239,14 @@ class ScheduleView(EventPermissionRequired, ScheduleMixin, TemplateView):
             date["talks"] = talks
         return {"data": list(data)}
 
+    def get_context_data(self, **kwargs):
+        result = super().get_context_data(**kwargs)
+        if "schedule" not in result:
+            return result
 
-class ScheduleNoJsView(ScheduleView):
-    template_name = "agenda/schedule_nojs.html"
+        result.update(**self.get_schedule_data())
+        result["day_count"] = len(result["data"])
+        return result
 
 
 class ChangelogView(EventPermissionRequired, TemplateView):

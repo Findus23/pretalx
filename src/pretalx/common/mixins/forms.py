@@ -1,14 +1,22 @@
+import logging
 from decimal import Decimal
 from functools import partial
 
 from django import forms
+from django.core.files import File
+from django.core.files.storage import default_storage
 from django.core.files.uploadedfile import UploadedFile
+from django.utils.crypto import get_random_string
 from django.utils.translation import gettext_lazy as _
+from hierarkey.forms import HierarkeyForm
+from i18nfield.forms import I18nFormField
 
 from pretalx.common.forms.fields import SizeFileField
 from pretalx.common.forms.utils import get_help_text, validate_field_length
 from pretalx.common.phrases import phrases
 from pretalx.common.templatetags.rich_text import rich_text
+
+logger = logging.getLogger(__name__)
 
 
 class ReadOnlyFlag:
@@ -32,7 +40,7 @@ class PublicContent:
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         event = getattr(self, "event", None)
-        if event and not event.settings.show_schedule:
+        if event and not event.feature_flags["show_schedule"]:
             return
         for field_name in self.Meta.public_fields:
             field = self.fields.get(field_name)
@@ -47,17 +55,16 @@ class PublicContent:
 class RequestRequire:
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        count_chars = self.event.settings.cfp_count_length_in == "chars"
+        count_chars = self.event.cfp.settings["count_length_in"] == "chars"
         for key in self.Meta.request_require:
-            request = self.event.settings.get(f"cfp_request_{key}")
-            require = self.event.settings.get(f"cfp_require_{key}")
-            if not request and not require:
+            visibility = self.event.cfp.fields[key]["visibility"]
+            if visibility == "do_not_ask":
                 self.fields.pop(key, None)
             else:
                 field = self.fields[key]
-                field.required = require
-                min_value = self.event.settings.get(f"cfp_{key}_min_length")
-                max_value = self.event.settings.get(f"cfp_{key}_max_length")
+                field.required = visibility == "required"
+                min_value = self.event.cfp.fields[key].get("min_length")
+                max_value = self.event.cfp.fields[key].get("max_length")
                 if min_value or max_value:
                     if min_value and count_chars:
                         field.widget.attrs["minlength"] = min_value
@@ -68,7 +75,7 @@ class RequestRequire:
                             validate_field_length,
                             min_length=min_value,
                             max_length=max_value,
-                            count_in=self.event.settings.cfp_count_length_in,
+                            count_in=self.event.cfp.settings["count_length_in"],
                         )
                     )
                     field.original_help_text = getattr(field, "original_help_text", "")
@@ -76,7 +83,7 @@ class RequestRequire:
                         "",
                         min_value,
                         max_value,
-                        self.event.settings.cfp_count_length_in,
+                        self.event.cfp.settings["count_length_in"],
                     )
                     field.help_text = (
                         field.original_help_text + " " + field.added_help_text
@@ -90,9 +97,9 @@ class QuestionFieldsMixin:
         read_only = readonly or question.read_only
         original_help_text = question.help_text
         help_text = rich_text(question.help_text)
-        if question.is_public and self.event.settings.show_schedule:
+        if question.is_public and self.event.feature_flags["show_schedule"]:
             help_text += " " + str(phrases.base.public_content)
-        count_chars = self.event.settings.cfp_count_length_in == "chars"
+        count_chars = self.event.cfp.settings["count_length_in"] == "chars"
         if question.variant == QuestionVariant.BOOLEAN:
             # For some reason, django-bootstrap4 does not set the required attribute
             # itself.
@@ -133,7 +140,7 @@ class QuestionFieldsMixin:
                     help_text,
                     question.min_length,
                     question.max_length,
-                    self.event.settings.cfp_count_length_in,
+                    self.event.cfp.settings["count_length_in"],
                 ),
                 label=question.question,
                 required=question.required,
@@ -148,7 +155,7 @@ class QuestionFieldsMixin:
                     validate_field_length,
                     min_length=question.min_length,
                     max_length=question.max_length,
-                    count_in=self.event.settings.cfp_count_length_in,
+                    count_in=self.event.cfp.settings["count_length_in"],
                 )
             )
             return field
@@ -162,7 +169,7 @@ class QuestionFieldsMixin:
                     help_text,
                     question.min_length,
                     question.max_length,
-                    self.event.settings.cfp_count_length_in,
+                    self.event.cfp.settings["count_length_in"],
                 ),
                 initial=initial,
                 min_length=question.min_length if count_chars else None,
@@ -173,7 +180,7 @@ class QuestionFieldsMixin:
                     validate_field_length,
                     min_length=question.min_length,
                     max_length=question.max_length,
-                    count_in=self.event.settings.cfp_count_length_in,
+                    count_in=self.event.cfp.settings["count_length_in"],
                 )
             )
             field.original_help_text = original_help_text
@@ -280,3 +287,104 @@ class QuestionFieldsMixin:
             value = answer.answer
         else:
             answer.answer = value
+
+
+class I18nHelpText:
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for field in self.fields.values():
+            if isinstance(field, I18nFormField) and not field.widget.attrs.get(
+                "placeholder"
+            ):
+                field.widget.attrs["placeholder"] = field.label
+
+
+class JsonSubfieldMixin:
+    def __init__(self, *args, **kwargs):
+        obj = kwargs.pop("obj", None)
+        super().__init__(*args, **kwargs)
+        if not getattr(self, "instance", None):
+            if obj:
+                self.instance = obj
+            elif getattr(self, "obj"):
+                self.instance = self.obj
+        for field, path in self.Meta.json_fields.items():
+            data_dict = getattr(self.instance, path) or {}
+            self.fields[field].initial = data_dict.get(field)
+
+    def save(self, *args, **kwargs):
+        if hasattr(super(), "save"):
+            instance = super().save(*args, **kwargs)
+        else:
+            instance = self.instance
+        for field, path in self.Meta.json_fields.items():
+            # We don't need nested data for now
+            data_dict = getattr(instance, path) or {}
+            data_dict[field] = self.cleaned_data.get(field)
+            setattr(instance, path, data_dict)
+        if kwargs.get("commit", True):
+            instance.save()
+        return instance
+
+
+class HierarkeyMixin:
+    """This basically vendors hierarkey.forms.HierarkeyForm, but with more
+    selective saving of fields."""
+
+    BOOL_CHOICES = HierarkeyForm.BOOL_CHOICES
+
+    def __init__(self, *args, obj, attribute_name="settings", **kwargs):
+        self.obj = obj
+        self.attribute_name = attribute_name
+        self._s = getattr(obj, attribute_name)
+        base_initial = self._s.freeze()
+        base_initial.update(**kwargs["initial"])
+        kwargs["initial"] = base_initial
+        super().__init__(*args, **kwargs)
+
+    def save(self, *args, **kwargs):
+        """Saves all changed values to the database."""
+        super().save(*args, **kwargs)
+        for name in self.Meta.hierarkey_fields:
+            field = self.fields.get(name)
+            value = self.cleaned_data[name]
+            if isinstance(value, UploadedFile):
+                # Delete old file
+                fname = self._s.get(name, as_type=File)
+                if fname:
+                    try:
+                        default_storage.delete(fname.name)
+                    except OSError:  # pragma: no cover
+                        logger.error("Deleting file %s failed." % fname.name)
+
+                # Create new file
+                newname = default_storage.save(self.get_new_filename(value.name), value)
+                value._name = newname
+                self._s.set(name, value)
+            elif isinstance(value, File):
+                # file is unchanged
+                continue
+            elif not value and isinstance(field, forms.FileField):
+                # file is deleted
+                fname = self._s.get(name, as_type=File)
+                if fname:
+                    try:
+                        default_storage.delete(fname.name)
+                    except OSError:  # pragma: no cover
+                        logger.error("Deleting file %s failed." % fname.name)
+                del self._s[name]
+            elif value is None:
+                del self._s[name]
+            elif self._s.get(name, as_type=type(value)) != value:
+                self._s.set(name, value)
+
+    def get_new_filename(self, name: str) -> str:
+        nonce = get_random_string(length=8)
+        return "%s-%s/%s/%s.%s.%s" % (
+            self.obj._meta.model_name,
+            self.attribute_name,
+            self.obj.pk,
+            name,
+            nonce,
+            name.split(".")[-1],
+        )

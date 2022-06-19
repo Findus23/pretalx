@@ -55,7 +55,11 @@ def mail_send_task(
 ):
     if isinstance(to, str):
         to = [to]
-    to = [t for t in to if not t.endswith("@localhost")]
+    to = [
+        t
+        for t in to
+        if (not t.endswith("@localhost")) and (not t.endswith("@example.org"))
+    ]
     if not to:
         return
     reply_to = (
@@ -67,10 +71,10 @@ def mail_send_task(
         backend = event.get_mail_backend()
 
         sender = settings.MAIL_FROM
-        if event.settings.smtp_use_custom:
-            sender = event.settings.mail_from or sender
+        if event.mail_settings["smtp_use_custom"]:
+            sender = event.mail_settings["mail_from"] or sender
 
-        reply_to = reply_to or event.settings.mail_reply_to
+        reply_to = reply_to or event.mail_settings["reply_to"]
         if not reply_to and sender == settings.MAIL_FROM:
             reply_to = event.email
 

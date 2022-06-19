@@ -6,6 +6,7 @@ from django.conf import settings
 from django.shortcuts import get_object_or_404, redirect, reverse
 from django.urls import resolve
 from django.utils import timezone, translation
+from django.utils.translation import LANGUAGE_SESSION_KEY
 from django.utils.translation.trans_real import (
     get_supported_language_variant,
     language_code_re,
@@ -118,12 +119,12 @@ class EventPermissionMiddleware:
                 return redirect(url)
         elif (
             event
-            and request.event.settings.custom_domain
+            and request.event.custom_domain
             and not request.uses_custom_domain
             and not is_exempt
         ):
             response = redirect(
-                urljoin(request.event.settings.custom_domain, request.get_full_path())
+                urljoin(request.event.custom_domain, request.get_full_path())
             )
             response["Access-Control-Allow-Origin"] = "*"
             return response
@@ -144,8 +145,9 @@ class EventPermissionMiddleware:
             else list(settings.LANGUAGES_INFORMATION)
         )
         language = (
-            self._language_from_user(request, supported)
-            or self._language_from_cookie(request, supported)
+            self._language_from_request(request, supported)
+            or self._language_from_user(request, supported)
+            or self._language_from_session_or_cookie(request, supported)
             or self._language_from_browser(request, supported)
         )
         if hasattr(request, "event") and request.event:
@@ -180,7 +182,14 @@ class EventPermissionMiddleware:
                     return val
 
     @staticmethod
-    def _language_from_cookie(request, supported):
+    def _language_from_session_or_cookie(request, supported):
+        if hasattr(request, "session"):
+            with suppress(LookupError):
+                session_value = request.session.get(LANGUAGE_SESSION_KEY)
+                with suppress(LookupError):
+                    session_value = get_supported_language_variant(session_value)
+                    return session_value if session_value in supported else None
+
         cookie_value = request.COOKIES.get(settings.LANGUAGE_COOKIE_NAME)
         with suppress(LookupError):
             cookie_value = get_supported_language_variant(cookie_value)
@@ -192,3 +201,16 @@ class EventPermissionMiddleware:
             with suppress(LookupError):
                 value = get_supported_language_variant(request.user.locale)
                 return value if value in supported else None
+
+    @staticmethod
+    def _language_from_request(request, supported):
+        lang = request.GET.get("lang")
+        if lang:
+            with suppress(LookupError):
+                value = get_supported_language_variant(lang)
+                if value in supported:
+                    if hasattr(request, "session"):
+                        request.session[LANGUAGE_SESSION_KEY] = value
+                    else:
+                        request.COOKIES[settings.LANGUAGE_COOKIE_NAME] = value
+                    return value

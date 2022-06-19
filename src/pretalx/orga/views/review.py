@@ -4,7 +4,7 @@ from contextlib import suppress
 
 from django.contrib import messages
 from django.db import transaction
-from django.db.models import Count, Max, OuterRef, Q, Subquery
+from django.db.models import Count, Max, OuterRef, Subquery
 from django.shortcuts import get_object_or_404, redirect
 from django.utils.functional import cached_property
 from django.utils.translation import gettext_lazy as _
@@ -18,21 +18,25 @@ from pretalx.common.mixins.views import (
 )
 from pretalx.common.views import CreateOrUpdateView
 from pretalx.orga.forms.review import ReviewForm, TagsForm
+from pretalx.orga.forms.submission import SubmissionStateChangeForm
+from pretalx.orga.views.submission import ReviewerSubmissionFilter
 from pretalx.submission.forms import QuestionsForm, SubmissionFilterForm
 from pretalx.submission.models import Review, Submission, SubmissionStates
 
 
-class ReviewDashboard(EventPermissionRequired, Filterable, ListView):
+class ReviewDashboard(
+    EventPermissionRequired, Filterable, ReviewerSubmissionFilter, ListView
+):
     template_name = "orga/review/dashboard.html"
     paginate_by = None
     context_object_name = "submissions"
     permission_required = "orga.view_review_dashboard"
+    filter_fields = ("state", "submission_type", "tags", "track", "pending_state")
     default_filters = (
         "code__icontains",
         "speakers__name__icontains",
         "title__icontains",
     )
-    filter_fields = ("submission_type", "state", "track", "tags")
 
     def get_filter_form(self):
         return SubmissionFilterForm(
@@ -44,6 +48,7 @@ class ReviewDashboard(EventPermissionRequired, Filterable, ListView):
                 SubmissionStates.REJECTED,
                 SubmissionStates.CONFIRMED,
             ],
+            limit_tracks=self.limit_tracks,
         )
 
     def filter_range(self, queryset):
@@ -64,28 +69,22 @@ class ReviewDashboard(EventPermissionRequired, Filterable, ListView):
         return queryset
 
     def get_queryset(self):
-        aggregate_method = self.request.event.settings.review_score_aggregate
+        aggregate_method = self.request.event.review_settings["aggregate_method"]
         statistics_method = (
             statistics.median if aggregate_method == "median" else statistics.fmean
         )
-        queryset = self.request.event.submissions.filter(
-            state__in=[
-                SubmissionStates.SUBMITTED,
-                SubmissionStates.ACCEPTED,
-                SubmissionStates.REJECTED,
-                SubmissionStates.CONFIRMED,
-            ]
+        queryset = (
+            super()
+            .get_queryset(for_reviews=True)
+            .filter(
+                state__in=[
+                    SubmissionStates.SUBMITTED,
+                    SubmissionStates.ACCEPTED,
+                    SubmissionStates.REJECTED,
+                    SubmissionStates.CONFIRMED,
+                ]
+            )
         )
-        limit_tracks = self.request.user.teams.filter(
-            Q(all_events=True)
-            | Q(Q(all_events=False) & Q(limit_events__in=[self.request.event])),
-            limit_tracks__isnull=False,
-        ).prefetch_related("limit_tracks", "limit_tracks__event")
-        if limit_tracks:
-            tracks = set()
-            for team in limit_tracks:
-                tracks.update(team.limit_tracks.filter(event=self.request.event))
-            queryset = queryset.filter(track__in=tracks)
         queryset = self.filter_queryset(queryset).annotate(
             review_count=Count("reviews", distinct=True)
         )
@@ -98,7 +97,9 @@ class ReviewDashboard(EventPermissionRequired, Filterable, ListView):
         queryset = (
             queryset.annotate(user_score=Subquery(user_reviews))
             .select_related("track", "submission_type")
-            .prefetch_related("speakers", "reviews", "reviews__user", "reviews__scores")
+            .prefetch_related(
+                "speakers", "reviews", "reviews__user", "reviews__scores", "tags"
+            )
         )
 
         for submission in queryset:
@@ -118,7 +119,8 @@ class ReviewDashboard(EventPermissionRequired, Filterable, ListView):
                             if score.category_id in independent_ids:
                                 mapping[score.category_id].append(score.value)
                     mapping = {
-                        key: statistics_method(value) for key, value in mapping.items()
+                        key: round(statistics_method(value), 1)
+                        for key, value in mapping.items()
                     }
                     result = []
                     for category in self.independent_categories:
@@ -224,7 +226,7 @@ class ReviewDashboard(EventPermissionRequired, Filterable, ListView):
     @cached_property
     def show_tracks(self):
         return (
-            self.request.event.settings.use_tracks
+            self.request.event.feature_flags["use_tracks"]
             and self.request.event.tracks.all().count() > 1
         )
 
@@ -241,9 +243,15 @@ class ReviewDashboard(EventPermissionRequired, Filterable, ListView):
         result["next_submission"] = missing_reviews[0] if missing_reviews else None
         return result
 
+    def get_pending(self, request):
+        form = SubmissionStateChangeForm(request.POST)
+        if form.is_valid():
+            return form.cleaned_data.get("pending")
+
     @transaction.atomic
     def post(self, request, *args, **kwargs):
         total = {"accept": 0, "reject": 0, "error": 0}
+        pending = self.get_pending(request)
         for key, value in request.POST.items():
             if not key.startswith("s-") or value not in ["accept", "reject"]:
                 continue
@@ -260,7 +268,15 @@ class ReviewDashboard(EventPermissionRequired, Filterable, ListView):
             ):
                 total["error"] += 1
                 continue
-            getattr(submission, value)(person=request.user)
+            if pending:
+                submission.pending_state = (
+                    SubmissionStates.ACCEPTED
+                    if value == "accept"
+                    else SubmissionStates.REJECTED
+                )
+                submission.save()
+            else:
+                getattr(submission, value)(person=request.user)
             total[value] += 1
         if total["accept"] or total["reject"]:
             msg = str(

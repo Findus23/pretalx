@@ -1,14 +1,16 @@
 from django import forms
 from django.utils.functional import cached_property
 from django.utils.translation import gettext_lazy as _
-from i18nfield.forms import I18nModelForm
+from django_scopes.forms import SafeModelMultipleChoiceField
+from i18nfield.forms import I18nFormMixin, I18nModelForm
 
+from pretalx.common.mixins.forms import I18nHelpText
 from pretalx.orga.forms.export import ExportForm
-from pretalx.schedule.models import Schedule
+from pretalx.schedule.models import Room, Schedule
 from pretalx.submission.models.submission import Submission, SubmissionStates
 
 
-class ScheduleReleaseForm(I18nModelForm):
+class ScheduleReleaseForm(I18nHelpText, I18nModelForm):
     notify_speakers = forms.BooleanField(
         label=_("Notify speakers of changes"), required=False, initial=True
     )
@@ -54,6 +56,7 @@ class ScheduleExportForm(ExportForm):
         model_fields = [
             "title",
             "state",
+            "pending_state",
             "submission_type",
             "track",
             "created",
@@ -183,3 +186,38 @@ class ScheduleExportForm(ExportForm):
 
     def _get_tags_value(self, obj):
         return [tag.tag for tag in obj.tags.all()] or None
+
+
+class ScheduleRoomForm(I18nFormMixin, forms.Form):
+    room = SafeModelMultipleChoiceField(
+        label=_("Rooms"),
+        required=False,
+        queryset=Room.objects.none(),
+        widget=forms.SelectMultiple(
+            attrs={"class": "select2", "data-placeholder": _("Rooms")}
+        ),
+    )
+
+    def __init__(self, *args, event=None, **kwargs):
+        self.event = event
+        super().__init__(*args, **kwargs)
+        self.fields["room"].queryset = self.event.rooms.all()
+
+
+class ScheduleVersionForm(forms.Form):
+    version = forms.ChoiceField(
+        label=_("Version"),
+        required=False,
+        choices=[],
+        widget=forms.SelectMultiple(
+            attrs={"class": "select2", "data-placeholder": _("Version")}
+        ),
+    )
+
+    def __init__(self, *args, event=None, **kwargs):
+        self.event = event
+        super().__init__(*args, **kwargs)
+        self.fields["version"].choices = [
+            (s.version, s.version)
+            for s in self.event.schedules.filter(version__isnull=False)
+        ]

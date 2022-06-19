@@ -16,7 +16,6 @@
         <script defer src="{% static "vendored/moment-timezone-with-data-2012-2022.js" %}"></script>
         <script defer src="{% static "vendored/datetimepicker/bootstrap-datetimepicker.js" %}"></script>
         <script defer src="{% static "orga/js/datetimepicker.js" %}"></script>
-        <script defer src="{% static "vendored/typeahead.bundle.min.js" %}"></script>
         <script defer src="{% static "orga/js/speakers.js" %}"></script>
         <script defer src="{% static "orga/js/submission_form.js" %}"></script>
     {% endcompress %}
@@ -39,7 +38,9 @@
             {% bootstrap_field form.speaker layout='event' %}
             {% bootstrap_field form.speaker_name layout='event' %}
             {% bootstrap_field form.state layout='event' %}
-            <div id="show-if-state" class="d-none">
+        {% endif %}
+        {% if form.room %}
+            <div id="show-if-state" {% if action == "create" %}class="d-none"{% endif %}>
                 {% bootstrap_field form.room layout='event' %}
                 {% bootstrap_field form.start layout='event' %}
                 {% bootstrap_field form.end layout='event' %}
@@ -64,7 +65,7 @@
         {% if form.description %}{% bootstrap_field form.description layout='event' %}{% endif %}
         {% if form.notes %}{% bootstrap_field form.notes layout='event' %}{% endif %}
         {% bootstrap_field form.internal_notes layout='event' %}
-        {% bootstrap_field form.content_locale layout='event' %}
+        {% if form.content_locale %}{% bootstrap_field form.content_locale layout='event' %}{% endif %}
         {% if form.do_not_record %}{% bootstrap_field form.do_not_record layout='event' %}{% endif %}
         {% bootstrap_field form.is_featured layout='event' %}
         {% bootstrap_field form.duration addon_after='minutes' layout='event' addon_after_class="input-group-append input-group-text" %}

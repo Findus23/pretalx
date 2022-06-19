@@ -4,6 +4,7 @@ from django.core.validators import RegexValidator
 from django.db import models, transaction
 from django.utils.crypto import get_random_string
 from django.utils.functional import cached_property
+from django.utils.translation import get_language
 from django.utils.translation import gettext_lazy as _
 from django_scopes import scope, scopes_disabled
 from i18nfield.fields import I18nCharField
@@ -108,6 +109,14 @@ class Team(LogMixin, models.Model):
         default=False, verbose_name=_("Can work with and change proposals")
     )
     is_reviewer = models.BooleanField(default=False, verbose_name=_("Is a reviewer"))
+    force_hide_speaker_names = models.BooleanField(
+        verbose_name=_("Always hide speaker names"),
+        help_text=_(
+            "Normally, anonymisation is configured in the event review settings. "
+            "This setting will <b>override the event settings</b> and always hide speaker names for this team."
+        ),
+        default=False,
+    )
 
     def __str__(self) -> str:
         """Help with debugging."""
@@ -181,6 +190,7 @@ The {organiser} team"""
             to=self.email,
             subject=str(invitation_subject),
             text=str(invitation_text),
+            locale=get_language(),
         )
         mail.send()
         return mail

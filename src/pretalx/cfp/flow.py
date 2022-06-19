@@ -202,6 +202,12 @@ class FormFlowStep(TemplateFlowStep):
         self.request = request
         form = self.get_form()
         if not form.is_valid():
+            error_message = "\n\n".join(
+                (f"{form.fields[key].label}: " if key != "__all__" else "")
+                + " ".join(values)
+                for key, values in form.errors.items()
+            )
+            messages.error(self.request, error_message)
             return self.get(request)
         self.set_data(form.cleaned_data)
         self.set_files(form.files)
@@ -321,7 +327,13 @@ class InfoStep(GenericFlowStep, FormFlowStep):
         submission = form.instance
         submission.speakers.add(request.user)
         submission.log_action("pretalx.submission.create", person=request.user)
-        messages.success(request, phrases.cfp.submission_success)
+        messages.success(
+            self.request,
+            _(
+                "Congratulations, you've submitted your proposal! You can continue to make changes to it "
+                "up to the submission deadline, and you will be notified of any changes or questions."
+            ),
+        )
 
         additional_speaker = form.cleaned_data.get("additional_speaker").strip()
         if additional_speaker:
@@ -517,7 +529,7 @@ class CfPFlow:
 
     def __init__(self, event):
         self.event = event
-        data = event.settings.cfp_flow
+        data = event.cfp.settings["flow"]
         self.config = self.get_config(data)
 
         steps = [step(event=event) for step in DEFAULT_STEPS]
@@ -633,7 +645,8 @@ class CfPFlow:
         if isinstance(data, list) or (isinstance(data, dict) and "steps" not in data):
             data = {"steps": data}
         data = self.get_config(data, json_compat=True)
-        self.event.settings.cfp_flow = data
+        self.event.cfp.settings["flow"] = data
+        self.event.cfp.save()
 
     def reset(self):
         self.save_config(None)

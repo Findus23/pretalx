@@ -8,13 +8,13 @@ from django_scopes.forms import SafeModelMultipleChoiceField
 from i18nfield.forms import I18nModelForm
 
 from pretalx.common.forms.fields import ImageField
-from pretalx.common.mixins.forms import ReadOnlyFlag
+from pretalx.common.mixins.forms import I18nHelpText, ReadOnlyFlag
 from pretalx.event.models import Event, Organiser, Team, TeamInvite
 from pretalx.orga.forms.widgets import HeaderSelect, MultipleLanguagesWidget
 from pretalx.submission.models import Track
 
 
-class TeamForm(ReadOnlyFlag, I18nModelForm):
+class TeamForm(ReadOnlyFlag, I18nHelpText, I18nModelForm):
     def __init__(self, *args, organiser=None, instance=None, **kwargs):
         super().__init__(*args, instance=instance, **kwargs)
         self.fields["organiser"].widget = forms.HiddenInput()
@@ -27,7 +27,7 @@ class TeamForm(ReadOnlyFlag, I18nModelForm):
         if instance and instance.pk:
             self.fields["is_reviewer"].help_text = mark_safe(
                 f' (<a href="{instance.orga_urls.base}tracks">'
-                + str(_("Limit to certain tracks?"))
+                + str(_("Additional review team settings"))
                 + "</a>)"
             )
 
@@ -47,7 +47,7 @@ class TeamForm(ReadOnlyFlag, I18nModelForm):
         ]
 
 
-class TeamTrackForm(I18nModelForm):
+class TeamTrackForm(I18nHelpText, I18nModelForm):
     @scopes_disabled()
     def __init__(self, *args, organiser=None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -67,10 +67,11 @@ class TeamTrackForm(I18nModelForm):
 
     class Meta:
         model = Team
-        fields = ["limit_tracks"]
+        fields = ["force_hide_speaker_names", "limit_tracks"]
         field_classes = {
             "limit_tracks": SafeModelMultipleChoiceField,
         }
+        widgets = {"limit_tracks": forms.CheckboxSelectMultiple}
 
 
 class TeamInviteForm(ReadOnlyFlag, forms.ModelForm):
@@ -83,7 +84,7 @@ class TeamInviteForm(ReadOnlyFlag, forms.ModelForm):
         fields = ("email",)
 
 
-class OrganiserForm(ReadOnlyFlag, I18nModelForm):
+class OrganiserForm(ReadOnlyFlag, I18nHelpText, I18nModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -124,7 +125,7 @@ class EventWizardInitialForm(forms.Form):
         self.fields["organiser"].initial = self.fields["organiser"].queryset.first()
 
 
-class EventWizardBasicsForm(I18nModelForm):
+class EventWizardBasicsForm(I18nHelpText, I18nModelForm):
     def __init__(self, *args, user=None, locales=None, organiser=None, **kwargs):
         self.locales = locales or []
         super().__init__(*args, **kwargs, locales=locales)
@@ -193,7 +194,7 @@ class EventWizardDisplayForm(forms.Form):
         ),
         required=False,
     )
-    display_header_pattern = forms.ChoiceField(
+    header_pattern = forms.ChoiceField(
         label=_("Frontpage header pattern"),
         help_text=_(
             'Choose how the frontpage header banner will be styled. Pattern source: <a href="http://www.heropatterns.com/">heropatterns.com</a>, CC BY 4.0.'

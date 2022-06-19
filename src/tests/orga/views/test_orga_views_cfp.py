@@ -19,7 +19,7 @@ def test_edit_cfp(orga_client, event):
             "headline_0": "new headline",
             "text_0": "",
             "deadline": "2000-10-10 20:20",
-            "settings-cfp_count_length_in": "chars",
+            "count_length_in": "chars",
             "settings-cfp_ask_abstract": "required",
             "settings-cfp_ask_description": "do_not_ask",
             "settings-cfp_ask_notes": "optional",
@@ -848,13 +848,13 @@ def test_can_send_access_code(orga_client, access_code):
     assert response.status_code == 200
     response = orga_client.post(
         access_code.urls.send,
-        {"to": "test@example.org", "text": "test test", "subject": "test"},
+        {"to": "test@example.com", "text": "test test", "subject": "test"},
         follow=True,
     )
     assert response.status_code == 200
     assert len(djmail.outbox) == 1
     mail = djmail.outbox[0]
-    assert mail.to == ["test@example.org"]
+    assert mail.to == ["test@example.com"]
     assert mail.body == "test test"
     assert mail.subject == "test"
 

@@ -6,6 +6,7 @@ from operator import itemgetter
 
 from dateutil import rrule
 from django.contrib import messages
+from django.contrib.contenttypes.models import ContentType
 from django.contrib.syndication.views import Feed
 from django.db import transaction
 from django.db.models import Exists, OuterRef, Q
@@ -19,7 +20,14 @@ from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils.timezone import now
 from django.utils.translation import gettext as _
 from django.utils.translation import override
-from django.views.generic import DetailView, ListView, TemplateView, UpdateView, View
+from django.views.generic import (
+    DetailView,
+    FormView,
+    ListView,
+    TemplateView,
+    UpdateView,
+    View,
+)
 
 from pretalx.common.exceptions import SubmissionError
 from pretalx.common.mixins.views import (
@@ -33,7 +41,11 @@ from pretalx.common.models import ActivityLog
 from pretalx.common.urls import build_absolute_uri
 from pretalx.common.views import CreateOrUpdateView, context
 from pretalx.mail.models import QueuedMail
-from pretalx.orga.forms import AnonymiseForm, SubmissionForm
+from pretalx.orga.forms.submission import (
+    AnonymiseForm,
+    SubmissionForm,
+    SubmissionStateChangeForm,
+)
 from pretalx.person.forms import OrgaSpeakerForm
 from pretalx.person.models import SpeakerProfile, User
 from pretalx.submission.forms import (
@@ -95,15 +107,19 @@ The {event} orga crew"""
                 )
             ),
             text=invitation_text,
+            locale=submission.content_locale,
         )
         mail.to_users.add(user)
     return user
 
 
 class SubmissionViewMixin(PermissionRequired):
+    def get_queryset(self):
+        return Submission.all_objects.filter(event=self.request.event)
+
     def get_object(self):
         return get_object_or_404(
-            Submission.all_objects.filter(event=self.request.event),
+            self.get_queryset(),
             code__iexact=self.kwargs.get("code"),
         )
 
@@ -126,7 +142,40 @@ class SubmissionViewMixin(PermissionRequired):
         ).exists()
 
 
-class SubmissionStateChange(SubmissionViewMixin, TemplateView):
+class ReviewerSubmissionFilter:
+    @cached_property
+    def limit_tracks(self):
+        permissions = self.request.user.get_permissions_for_event(self.request.event)
+        if "is_reviewer" not in permissions:
+            return None
+        if "can_change_submissions" in permissions and not self._for_reviews:
+            return None
+        limit_tracks = self.request.user.teams.filter(
+            Q(all_events=True)
+            | Q(Q(all_events=False) & Q(limit_events__in=[self.request.event])),
+            limit_tracks__isnull=False,
+            organiser=self.request.event.organiser,
+        ).prefetch_related("limit_tracks", "limit_tracks__event")
+        if limit_tracks:
+            tracks = set()
+            for team in limit_tracks:
+                tracks.update(team.limit_tracks.filter(event=self.request.event))
+            return tracks
+
+    def get_queryset(self, for_reviews=False):
+        self._for_reviews = for_reviews
+        queryset = (
+            self.request.event.submissions.all()
+            .select_related("submission_type", "event", "track")
+            .prefetch_related("speakers")
+        )
+        if self.limit_tracks:
+            queryset = queryset.filter(track__in=self.limit_tracks)
+        return queryset
+
+
+class SubmissionStateChange(SubmissionViewMixin, FormView):
+    form_class = SubmissionStateChangeForm
     permission_required = "orga.change_submission_state"
     template_name = "orga/submission/state_change.html"
     TARGETS = {
@@ -149,27 +198,33 @@ class SubmissionStateChange(SubmissionViewMixin, TemplateView):
     def target(self):
         return self._target
 
-    def do(self, force=False):
-        method = getattr(self.object, SubmissionStates.method_names[self._target])
-        method(person=self.request.user, force=force, orga=True)
+    def do(self, force=False, pending=False):
+        if pending:
+            self.object.pending_state = self._target
+            self.object.save()
+        else:
+            method = getattr(self.object, SubmissionStates.method_names[self._target])
+            method(person=self.request.user, force=force, orga=True)
 
     @transaction.atomic
-    def post(self, request, *args, **kwargs):
+    def form_valid(self, form):
         if self._target == self.object.state:
             messages.info(
-                request,
+                self.request,
                 _(
                     "Somebody else was faster than you: this proposal was already in the state you wanted to change it to."
                 ),
             )
         else:
             try:
-                self.do()
+                self.do(pending=form.cleaned_data.get("pending"))
             except SubmissionError:
                 self.do(force=True)
         url = self.request.GET.get("next")
         if url and url_has_allowed_host_and_scheme(url, allowed_hosts=None):
             return redirect(url)
+        elif self.object.state == SubmissionStates.DELETED:
+            return redirect(self.request.event.orga_urls.submissions)
         return redirect(self.object.orga_urls.base)
 
     @context
@@ -232,7 +287,7 @@ class SubmissionSpeakersDelete(SubmissionViewMixin, View):
         return redirect(submission.orga_urls.speakers)
 
 
-class SubmissionSpeakers(SubmissionViewMixin, TemplateView):
+class SubmissionSpeakers(ReviewerSubmissionFilter, SubmissionViewMixin, TemplateView):
     template_name = "orga/submission/speakers.html"
     permission_required = "orga.view_speakers"
 
@@ -258,7 +313,9 @@ class SubmissionSpeakers(SubmissionViewMixin, TemplateView):
         return User.objects.all()
 
 
-class SubmissionContent(ActionFromUrl, SubmissionViewMixin, CreateOrUpdateView):
+class SubmissionContent(
+    ActionFromUrl, ReviewerSubmissionFilter, SubmissionViewMixin, CreateOrUpdateView
+):
     model = Submission
     form_class = SubmissionForm
     template_name = "orga/submission/content.html"
@@ -443,15 +500,23 @@ class SubmissionContent(ActionFromUrl, SubmissionViewMixin, CreateOrUpdateView):
         return kwargs
 
 
-class SubmissionList(EventPermissionRequired, Sortable, Filterable, ListView):
+class SubmissionList(
+    EventPermissionRequired, Sortable, Filterable, ReviewerSubmissionFilter, ListView
+):
     model = Submission
     context_object_name = "submissions"
     template_name = "orga/submission/list.html"
-    filter_fields = ("submission_type", "state", "track", "tags")
-    filter_form_class = SubmissionFilterForm
+    filter_fields = ("submission_type", "state", "track", "tags", "pending_state")
     sortable_fields = ("code", "title", "state", "is_featured")
     permission_required = "orga.view_submissions"
     paginate_by = 25
+
+    def get_filter_form(self):
+        return SubmissionFilterForm(
+            data=self.request.GET,
+            event=self.request.event,
+            limit_tracks=self.limit_tracks,
+        )
 
     def get_default_filters(self, *args, **kwargs):
         default_filters = {"code__icontains", "title__icontains"}
@@ -464,20 +529,21 @@ class SubmissionList(EventPermissionRequired, Sortable, Filterable, ListView):
         return self.request.event.submission_types.all().count() > 1
 
     @context
+    @cached_property
+    def pending_changes(self):
+        return self.request.event.submissions.filter(
+            pending_state__isnull=False
+        ).count()
+
+    @context
     def show_tracks(self):
-        return (
-            self.request.event.settings.use_tracks
-            and self.request.event.tracks.all().count() > 1
-        )
+        if self.request.event.feature_flags["use_tracks"]:
+            if self.limit_tracks:
+                return len(self.limit_tracks) > 1
+            return self.request.event.tracks.all().count() > 1
 
     def get_queryset(self):
-        qs = (
-            Submission.all_objects.filter(event=self.request.event)
-            .select_related("submission_type", "event", "track")
-            .prefetch_related("speakers")
-            .order_by("-id")
-            .all()
-        )
+        qs = super().get_queryset().order_by("-id")
         qs = self.filter_queryset(qs)
         question = self.request.GET.get("question")
         unanswered = self.request.GET.get("unanswered")
@@ -514,8 +580,19 @@ class FeedbackList(SubmissionViewMixin, ListView):
     paginate_by = 25
     permission_required = "submission.view_feedback"
 
+    @context
+    @cached_property
+    def submission(self):
+        return get_object_or_404(
+            Submission.all_objects.filter(event=self.request.event),
+            code__iexact=self.kwargs.get("code"),
+        )
+
     def get_queryset(self):
-        return self.object.feedback.all().order_by("pk")
+        return self.submission.feedback.all().order_by("pk")
+
+    def get_permission_object(self):
+        return self.submission
 
 
 class ToggleFeatured(SubmissionViewMixin, View):
@@ -628,7 +705,7 @@ class SubmissionStats(PermissionRequired, TemplateView):
     @cached_property
     def show_tracks(self):
         return (
-            self.request.event.settings.use_tracks
+            self.request.event.feature_flags["use_tracks"]
             and self.request.event.tracks.all().count() > 1
         )
 
@@ -658,12 +735,17 @@ class SubmissionStats(PermissionRequired, TemplateView):
 
     @cached_property
     def raw_submission_timeline_data(self):
+        talk_ids = self.request.event.submissions.exclude(
+            state=SubmissionStates.DELETED
+        ).values_list("id", flat=True)
         data = Counter(
             log.timestamp.astimezone(self.request.event.tz).date()
             for log in ActivityLog.objects.filter(
-                event=self.request.event, action_type="pretalx.submission.create"
+                event=self.request.event,
+                action_type="pretalx.submission.create",
+                content_type=ContentType.objects.get_for_model(Submission),
+                object_id__in=talk_ids,
             )
-            if getattr(log.content_object, "state", None) != SubmissionStates.DELETED
         )
         dates = data.keys()
         if len(dates) > 1:
@@ -715,7 +797,9 @@ class SubmissionStats(PermissionRequired, TemplateView):
     def submission_type_data(self):
         counter = Counter(
             str(submission.submission_type)
-            for submission in Submission.objects.filter(event=self.request.event)
+            for submission in Submission.objects.filter(
+                event=self.request.event
+            ).select_related("submission_type")
         )
         return json.dumps(
             sorted(
@@ -728,10 +812,12 @@ class SubmissionStats(PermissionRequired, TemplateView):
 
     @context
     def submission_track_data(self):
-        if self.request.event.settings.use_tracks:
+        if self.request.event.feature_flags["use_tracks"]:
             counter = Counter(
                 str(submission.track)
-                for submission in Submission.objects.filter(event=self.request.event)
+                for submission in Submission.objects.filter(
+                    event=self.request.event
+                ).select_related("track")
             )
             return json.dumps(
                 sorted(
@@ -746,14 +832,17 @@ class SubmissionStats(PermissionRequired, TemplateView):
 
     @context
     def talk_timeline_data(self):
+        talk_ids = self.request.event.submissions.filter(
+            state__in=[SubmissionStates.ACCEPTED, SubmissionStates.CONFIRMED]
+        ).values_list("id", flat=True)
         data = Counter(
             log.timestamp.astimezone(self.request.event.tz).date().isoformat()
             for log in ActivityLog.objects.filter(
                 event=self.request.event,
                 action_type="pretalx.submission.create",
+                content_type=ContentType.objects.get_for_model(Submission),
+                object_id__in=talk_ids,
             )
-            if getattr(log.content_object, "state", None)
-            in [SubmissionStates.ACCEPTED, SubmissionStates.CONFIRMED]
         )
         if len(data.keys()) > 1:
             return json.dumps(
@@ -787,7 +876,7 @@ class SubmissionStats(PermissionRequired, TemplateView):
             str(submission.submission_type)
             for submission in self.request.event.submissions.filter(
                 state__in=[SubmissionStates.ACCEPTED, SubmissionStates.CONFIRMED]
-            )
+            ).select_related("submission_type")
         )
         return json.dumps(
             sorted(
@@ -800,12 +889,12 @@ class SubmissionStats(PermissionRequired, TemplateView):
 
     @context
     def talk_track_data(self):
-        if self.request.event.settings.use_tracks:
+        if self.request.event.feature_flags["use_tracks"]:
             counter = Counter(
                 str(submission.track)
                 for submission in self.request.event.submissions.filter(
                     state__in=[SubmissionStates.ACCEPTED, SubmissionStates.CONFIRMED]
-                )
+                ).select_related("track")
             )
             return json.dumps(
                 sorted(
@@ -893,3 +982,38 @@ class TagDelete(PermissionRequired, DetailView):
         )
         messages.success(request, _("The tag has been deleted."))
         return redirect(self.request.event.orga_urls.tags)
+
+
+class ApplyPending(EventPermissionRequired, TemplateView):
+    permission_required = "orga.change_submissions"
+    template_name = "orga/submission/apply_pending.html"
+
+    @cached_property
+    def submissions(self):
+        return self.request.event.submissions.filter(pending_state__isnull=False)
+
+    @context
+    @cached_property
+    def submission_count(self):
+        return len(self.submissions)
+
+    def post(self, request, *args, **kwargs):
+        for submission in self.submissions:
+            try:
+                submission.apply_pending_state(person=self.request.user)
+            except Exception:
+                submission.apply_pending_state(person=self.request.user, force=True)
+        messages.success(
+            self.request,
+            str(_("Changed {count} proposal states.")).format(
+                count=self.submission_count
+            ),
+        )
+        url = self.request.GET.get("next")
+        if url and url_has_allowed_host_and_scheme(url, allowed_hosts=None):
+            return redirect(url)
+        return redirect(self.request.event.orga_urls.submissions)
+
+    @context
+    def next(self):
+        return self.request.GET.get("next")
